@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,23 +18,34 @@ package org.springframework.boot.gradle.tasks.bundling;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
+import groovy.lang.Closure;
+import org.gradle.api.Action;
 import org.gradle.api.DefaultTask;
+import org.gradle.api.GradleException;
 import org.gradle.api.JavaVersion;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
 import org.gradle.api.file.RegularFileProperty;
+import org.gradle.api.provider.ListProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.options.Option;
+import org.gradle.util.ConfigureUtil;
 
 import org.springframework.boot.buildpack.platform.build.BuildRequest;
 import org.springframework.boot.buildpack.platform.build.Builder;
+import org.springframework.boot.buildpack.platform.build.BuildpackReference;
 import org.springframework.boot.buildpack.platform.build.Creator;
+import org.springframework.boot.buildpack.platform.build.PullPolicy;
 import org.springframework.boot.buildpack.platform.docker.transport.DockerEngineException;
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 import org.springframework.boot.buildpack.platform.docker.type.ImageName;
 import org.springframework.boot.buildpack.platform.docker.type.ImageReference;
 import org.springframework.boot.buildpack.platform.io.ZipFileTarArchive;
@@ -51,9 +62,13 @@ import org.springframework.util.StringUtils;
  */
 public class BootBuildImage extends DefaultTask {
 
-	private static final String OPENJDK_BUILDPACK_JAVA_VERSION_KEY = "BP_JAVA_VERSION";
+	private static final String BUILDPACK_JVM_VERSION_KEY = "BP_JVM_VERSION";
 
-	private RegularFileProperty jar;
+	private final String projectName;
+
+	private final Property<String> projectVersion;
+
+	private RegularFileProperty archiveFile;
 
 	private Property<JavaVersion> targetJavaVersion;
 
@@ -61,24 +76,53 @@ public class BootBuildImage extends DefaultTask {
 
 	private String builder;
 
+	private String runImage;
+
 	private Map<String, String> environment = new HashMap<>();
 
 	private boolean cleanCache;
 
 	private boolean verboseLogging;
 
+	private PullPolicy pullPolicy;
+
+	private boolean publish;
+
+	private final ListProperty<String> buildpacks;
+
+	private final ListProperty<String> bindings;
+
+	private final DockerSpec docker = new DockerSpec();
+
 	public BootBuildImage() {
-		this.jar = getProject().getObjects().fileProperty();
+		this.archiveFile = getProject().getObjects().fileProperty();
 		this.targetJavaVersion = getProject().getObjects().property(JavaVersion.class);
+		this.projectName = getProject().getName();
+		this.projectVersion = getProject().getObjects().property(String.class);
+		Project project = getProject();
+		this.projectVersion.set(getProject().provider(() -> project.getVersion().toString()));
+		this.buildpacks = getProject().getObjects().listProperty(String.class);
+		this.bindings = getProject().getObjects().listProperty(String.class);
 	}
 
 	/**
-	 * Returns the property for the jar file from which the image will be built.
-	 * @return the jar property
+	 * Returns the property for the archive file from which the image will be built.
+	 * @return the archive file property
 	 */
 	@Input
+	public RegularFileProperty getArchiveFile() {
+		return this.archiveFile;
+	}
+
+	/**
+	 * Returns the property for the archive file from which the image will be built.
+	 * @return the archive file property
+	 * @deprecated since 2.5.0 for removal in 2.7.0 in favor of {@link #getArchiveFile()}
+	 */
+	@Deprecated
+	@Input
 	public RegularFileProperty getJar() {
-		return this.jar;
+		return this.archiveFile;
 	}
 
 	/**
@@ -134,6 +178,26 @@ public class BootBuildImage extends DefaultTask {
 	}
 
 	/**
+	 * Returns the run image that will be included in the built image. When {@code null},
+	 * the run image bundled with the builder will be used.
+	 * @return the run image
+	 */
+	@Input
+	@Optional
+	public String getRunImage() {
+		return this.runImage;
+	}
+
+	/**
+	 * Sets the run image that will be included in the built image.
+	 * @param runImage the run image
+	 */
+	@Option(option = "runImage", description = "The name of the run image to use")
+	public void setRunImage(String runImage) {
+		this.runImage = runImage;
+	}
+
+	/**
 	 * Returns the environment that will be used when building the image.
 	 * @return the environment
 	 */
@@ -180,6 +244,7 @@ public class BootBuildImage extends DefaultTask {
 	 * Sets whether caches should be cleaned before packaging.
 	 * @param cleanCache {@code true} to clean the cache, otherwise {@code false}.
 	 */
+	@Option(option = "cleanCache", description = "Clean caches before packaging")
 	public void setCleanCache(boolean cleanCache) {
 		this.cleanCache = cleanCache;
 	}
@@ -202,36 +267,177 @@ public class BootBuildImage extends DefaultTask {
 		this.verboseLogging = verboseLogging;
 	}
 
+	/**
+	 * Returns image pull policy that will be used when building the image.
+	 * @return whether images should be pulled
+	 */
+	@Input
+	@Optional
+	public PullPolicy getPullPolicy() {
+		return this.pullPolicy;
+	}
+
+	/**
+	 * Sets image pull policy that will be used when building the image.
+	 * @param pullPolicy image pull policy {@link PullPolicy}
+	 */
+	@Option(option = "pullPolicy", description = "The image pull policy")
+	public void setPullPolicy(PullPolicy pullPolicy) {
+		this.pullPolicy = pullPolicy;
+	}
+
+	/**
+	 * Whether the built image should be pushed to a registry.
+	 * @return whether the built image should be pushed
+	 */
+	@Input
+	public boolean isPublish() {
+		return this.publish;
+	}
+
+	/**
+	 * Sets whether the built image should be pushed to a registry.
+	 * @param publish {@code true} the push the built image to a registry. {@code false}.
+	 */
+	@Option(option = "publishImage", description = "Publish the built image to a registry")
+	public void setPublish(boolean publish) {
+		this.publish = publish;
+	}
+
+	/**
+	 * Returns the buildpacks that will be used when building the image.
+	 * @return the buildpack references
+	 */
+	@Input
+	@Optional
+	public List<String> getBuildpacks() {
+		return this.buildpacks.getOrNull();
+	}
+
+	/**
+	 * Sets the buildpacks that will be used when building the image.
+	 * @param buildpacks the buildpack references
+	 */
+	public void setBuildpacks(List<String> buildpacks) {
+		this.buildpacks.set(buildpacks);
+	}
+
+	/**
+	 * Add an entry to the buildpacks that will be used when building the image.
+	 * @param buildpack the buildpack reference
+	 */
+	public void buildpack(String buildpack) {
+		this.buildpacks.add(buildpack);
+	}
+
+	/**
+	 * Adds entries to the buildpacks that will be used when building the image.
+	 * @param buildpacks the buildpack references
+	 */
+	public void buildpacks(List<String> buildpacks) {
+		this.buildpacks.addAll(buildpacks);
+	}
+
+	/**
+	 * Returns the volume bindings that will be mounted to the container when building the
+	 * image.
+	 * @return the bindings
+	 */
+	@Input
+	@Optional
+	public List<String> getBindings() {
+		return this.bindings.getOrNull();
+	}
+
+	/**
+	 * Sets the volume bindings that will be mounted to the container when building the
+	 * image.
+	 * @param bindings the bindings
+	 */
+	public void setBindings(List<String> bindings) {
+		this.bindings.set(bindings);
+	}
+
+	/**
+	 * Add an entry to the volume bindings that will be mounted to the container when
+	 * building the image.
+	 * @param binding the binding
+	 */
+	public void binding(String binding) {
+		this.bindings.add(binding);
+	}
+
+	/**
+	 * Add entries to the volume bindings that will be mounted to the container when
+	 * building the image.
+	 * @param bindings the bindings
+	 */
+	public void bindings(List<String> bindings) {
+		this.bindings.addAll(bindings);
+	}
+
+	/**
+	 * Returns the Docker configuration the builder will use.
+	 * @return docker configuration.
+	 * @since 2.4.0
+	 */
+	@Nested
+	public DockerSpec getDocker() {
+		return this.docker;
+	}
+
+	/**
+	 * Configures the Docker connection using the given {@code action}.
+	 * @param action the action to apply
+	 * @since 2.4.0
+	 */
+	public void docker(Action<DockerSpec> action) {
+		action.execute(this.docker);
+	}
+
+	/**
+	 * Configures the Docker connection using the given {@code closure}.
+	 * @param closure the closure to apply
+	 * @since 2.4.0
+	 */
+	public void docker(Closure<?> closure) {
+		docker(ConfigureUtil.configureUsing(closure));
+	}
+
 	@TaskAction
 	void buildImage() throws DockerEngineException, IOException {
-		Builder builder = new Builder();
+		Builder builder = new Builder(this.docker.asDockerConfiguration());
 		BuildRequest request = createRequest();
 		builder.build(request);
 	}
 
 	BuildRequest createRequest() {
 		return customize(BuildRequest.of(determineImageReference(),
-				(owner) -> new ZipFileTarArchive(this.jar.get().getAsFile(), owner)));
+				(owner) -> new ZipFileTarArchive(this.archiveFile.get().getAsFile(), owner)));
 	}
 
 	private ImageReference determineImageReference() {
 		if (StringUtils.hasText(this.imageName)) {
 			return ImageReference.of(this.imageName);
 		}
-		ImageName imageName = ImageName.of(getProject().getName());
-		String version = getProject().getVersion().toString();
-		if ("unspecified".equals(version)) {
+		ImageName imageName = ImageName.of(this.projectName);
+		if ("unspecified".equals(this.projectVersion.get())) {
 			return ImageReference.of(imageName);
 		}
-		return ImageReference.of(imageName, version);
+		return ImageReference.of(imageName, this.projectVersion.get());
 	}
 
 	private BuildRequest customize(BuildRequest request) {
 		request = customizeBuilder(request);
+		request = customizeRunImage(request);
 		request = customizeEnvironment(request);
 		request = customizeCreator(request);
 		request = request.withCleanCache(this.cleanCache);
 		request = request.withVerboseLogging(this.verboseLogging);
+		request = customizePullPolicy(request);
+		request = customizePublish(request);
+		request = customizeBuildpacks(request);
+		request = customizeBindings(request);
 		return request;
 	}
 
@@ -242,12 +448,19 @@ public class BootBuildImage extends DefaultTask {
 		return request;
 	}
 
+	private BuildRequest customizeRunImage(BuildRequest request) {
+		if (StringUtils.hasText(this.runImage)) {
+			return request.withRunImage(ImageReference.of(this.runImage));
+		}
+		return request;
+	}
+
 	private BuildRequest customizeEnvironment(BuildRequest request) {
 		if (this.environment != null && !this.environment.isEmpty()) {
 			request = request.withEnv(this.environment);
 		}
-		if (this.targetJavaVersion.isPresent() && !request.getEnv().containsKey(OPENJDK_BUILDPACK_JAVA_VERSION_KEY)) {
-			request = request.withEnv(OPENJDK_BUILDPACK_JAVA_VERSION_KEY, translateTargetJavaVersion());
+		if (this.targetJavaVersion.isPresent() && !request.getEnv().containsKey(BUILDPACK_JVM_VERSION_KEY)) {
+			request = request.withEnv(BUILDPACK_JVM_VERSION_KEY, translateTargetJavaVersion());
 		}
 		return request;
 	}
@@ -256,6 +469,39 @@ public class BootBuildImage extends DefaultTask {
 		String springBootVersion = VersionExtractor.forClass(BootBuildImage.class);
 		if (StringUtils.hasText(springBootVersion)) {
 			return request.withCreator(Creator.withVersion(springBootVersion));
+		}
+		return request;
+	}
+
+	private BuildRequest customizePullPolicy(BuildRequest request) {
+		if (this.pullPolicy != null) {
+			request = request.withPullPolicy(this.pullPolicy);
+		}
+		return request;
+	}
+
+	private BuildRequest customizePublish(BuildRequest request) {
+		boolean publishRegistryAuthNotConfigured = this.docker == null || this.docker.getPublishRegistry() == null
+				|| this.docker.getPublishRegistry().hasEmptyAuth();
+		if (this.publish && publishRegistryAuthNotConfigured) {
+			throw new GradleException("Publishing an image requires docker.publishRegistry to be configured");
+		}
+		request = request.withPublish(this.publish);
+		return request;
+	}
+
+	private BuildRequest customizeBuildpacks(BuildRequest request) {
+		List<String> buildpacks = this.buildpacks.getOrNull();
+		if (buildpacks != null && !buildpacks.isEmpty()) {
+			return request.withBuildpacks(buildpacks.stream().map(BuildpackReference::of).collect(Collectors.toList()));
+		}
+		return request;
+	}
+
+	private BuildRequest customizeBindings(BuildRequest request) {
+		List<String> bindings = this.bindings.getOrNull();
+		if (bindings != null && !bindings.isEmpty()) {
+			return request.withBindings(bindings.stream().map(Binding::of).collect(Collectors.toList()));
 		}
 		return request;
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import com.mongodb.ConnectionString;
 import org.bson.UuidRepresentation;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.DeprecatedConfigurationProperty;
 
 /**
  * Configuration properties for Mongo.
@@ -74,10 +75,7 @@ public class MongoProperties {
 	 */
 	private String authenticationDatabase;
 
-	/**
-	 * GridFS database name.
-	 */
-	private String gridFsDatabase;
+	private final Gridfs gridfs = new Gridfs();
 
 	/**
 	 * Login user of the mongo server. Cannot be set with URI.
@@ -193,12 +191,25 @@ public class MongoProperties {
 		this.port = port;
 	}
 
-	public String getGridFsDatabase() {
-		return this.gridFsDatabase;
+	public Gridfs getGridfs() {
+		return this.gridfs;
 	}
 
+	/**
+	 * Return the GridFS database name.
+	 * @return the GridFS database name
+	 * @deprecated since 2.4.0 for removal in 2.6.0 in favor of
+	 * {@link Gridfs#getDatabase()}
+	 */
+	@DeprecatedConfigurationProperty(replacement = "spring.data.mongodb.gridfs.database")
+	@Deprecated
+	public String getGridFsDatabase() {
+		return this.gridfs.getDatabase();
+	}
+
+	@Deprecated
 	public void setGridFsDatabase(String gridFsDatabase) {
-		this.gridFsDatabase = gridFsDatabase;
+		this.gridfs.setDatabase(gridFsDatabase);
 	}
 
 	public String getMongoClientDatabase() {
@@ -214,6 +225,36 @@ public class MongoProperties {
 
 	public void setAutoIndexCreation(Boolean autoIndexCreation) {
 		this.autoIndexCreation = autoIndexCreation;
+	}
+
+	public static class Gridfs {
+
+		/**
+		 * GridFS database name.
+		 */
+		private String database;
+
+		/**
+		 * GridFS bucket name.
+		 */
+		private String bucket;
+
+		public String getDatabase() {
+			return this.database;
+		}
+
+		public void setDatabase(String database) {
+			this.database = database;
+		}
+
+		public String getBucket() {
+			return this.bucket;
+		}
+
+		public void setBucket(String bucket) {
+			this.bucket = bucket;
+		}
+
 	}
 
 }

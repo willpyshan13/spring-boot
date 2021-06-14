@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 
 import org.springframework.boot.buildpack.platform.docker.DockerApi;
 import org.springframework.boot.buildpack.platform.docker.LogUpdateEvent;
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 import org.springframework.boot.buildpack.platform.docker.type.ContainerConfig;
 import org.springframework.boot.buildpack.platform.docker.type.ContainerContent;
 import org.springframework.boot.buildpack.platform.docker.type.ContainerReference;
@@ -42,13 +43,13 @@ class Lifecycle implements Closeable {
 
 	private static final LifecycleVersion LOGGING_MINIMUM_VERSION = LifecycleVersion.parse("0.0.5");
 
+	private static final String PLATFORM_API_VERSION_KEY = "CNB_PLATFORM_API";
+
 	private final BuildLog log;
 
 	private final DockerApi docker;
 
 	private final BuildRequest request;
-
-	private final ImageReference runImageReference;
 
 	private final EphemeralBuilder builder;
 
@@ -73,23 +74,19 @@ class Lifecycle implements Closeable {
 	 * @param log build output log
 	 * @param docker the Docker API
 	 * @param request the request to process
-	 * @param runImageReference a reference to run image that should be used
 	 * @param builder the ephemeral builder used to run the phases
 	 */
-	Lifecycle(BuildLog log, DockerApi docker, BuildRequest request, ImageReference runImageReference,
-			EphemeralBuilder builder) {
+	Lifecycle(BuildLog log, DockerApi docker, BuildRequest request, EphemeralBuilder builder) {
 		this.log = log;
 		this.docker = docker;
 		this.request = request;
-		this.runImageReference = runImageReference;
 		this.builder = builder;
 		this.lifecycleVersion = LifecycleVersion.parse(builder.getBuilderMetadata().getLifecycle().getVersion());
-		this.platformVersion = ApiVersion.parse(builder.getBuilderMetadata().getLifecycle().getApi().getPlatform());
+		this.platformVersion = getPlatformVersion(builder.getBuilderMetadata().getLifecycle());
 		this.layersVolume = createRandomVolumeName("pack-layers-");
 		this.applicationVolume = createRandomVolumeName("pack-app-");
 		this.buildCacheVolume = createCacheVolumeName(request, ".build");
 		this.launchCacheVolume = createCacheVolumeName(request, ".launch");
-		checkPlatformVersion(this.platformVersion);
 	}
 
 	protected VolumeName createRandomVolumeName(String prefix) {
@@ -100,8 +97,13 @@ class Lifecycle implements Closeable {
 		return VolumeName.basedOn(request.getName(), ImageReference::toLegacyString, "pack-cache-", suffix, 6);
 	}
 
-	private void checkPlatformVersion(ApiVersion platformVersion) {
-		ApiVersions.SUPPORTED_PLATFORMS.assertSupports(platformVersion);
+	private ApiVersion getPlatformVersion(BuilderMetadata.Lifecycle lifecycle) {
+		if (lifecycle.getApis().getPlatform() != null) {
+			String[] supportedVersions = lifecycle.getApis().getPlatform();
+			return ApiVersions.SUPPORTED_PLATFORMS.findLatestSupported(supportedVersions);
+		}
+		String version = lifecycle.getApi().getPlatform();
+		return ApiVersions.SUPPORTED_PLATFORMS.findLatestSupported(version);
 	}
 
 	/**
@@ -115,85 +117,45 @@ class Lifecycle implements Closeable {
 		if (this.request.isCleanCache()) {
 			deleteVolume(this.buildCacheVolume);
 		}
-		run(detectPhase());
-		run(analyzePhase());
-		if (this.request.isCleanCache()) {
-			this.log.skippingPhase("restorer", "due to cleaning cache");
-		}
-		else {
-			run(restorePhase());
-		}
-		run(buildPhase());
-		run(exportPhase());
+		run(createPhase());
 		this.log.executedLifecycle(this.request);
 	}
 
-	private Phase detectPhase() {
-		Phase phase = createPhase("detector");
+	private Phase createPhase() {
+		Phase phase = new Phase("creator", isVerboseLogging());
+		phase.withDaemonAccess();
+		phase.withLogLevelArg();
 		phase.withArgs("-app", Directory.APPLICATION);
 		phase.withArgs("-platform", Directory.PLATFORM);
-		phase.withLogLevelArg();
-		return phase;
-	}
-
-	private Phase restorePhase() {
-		Phase phase = createPhase("restorer");
-		phase.withDaemonAccess();
-		phase.withArgs("-cache-dir", Directory.CACHE);
+		phase.withArgs("-run-image", this.request.getRunImage());
 		phase.withArgs("-layers", Directory.LAYERS);
-		phase.withLogLevelArg();
-		phase.withBinds(this.buildCacheVolume, Directory.CACHE);
-		return phase;
-	}
-
-	private Phase analyzePhase() {
-		Phase phase = createPhase("analyzer");
-		phase.withDaemonAccess();
-		phase.withLogLevelArg();
+		phase.withArgs("-cache-dir", Directory.CACHE);
+		phase.withArgs("-launch-cache", Directory.LAUNCH_CACHE);
 		phase.withArgs("-daemon");
 		if (this.request.isCleanCache()) {
-			phase.withArgs("-skip-layers");
+			phase.withArgs("-skip-restore");
 		}
-		else {
-			phase.withArgs("-cache-dir", Directory.CACHE);
+		if (requiresProcessTypeDefault()) {
+			phase.withArgs("-process-type=web");
 		}
-		phase.withArgs("-layers", Directory.LAYERS);
 		phase.withArgs(this.request.getName());
-		phase.withBinds(this.buildCacheVolume, Directory.CACHE);
+		phase.withBinding(Binding.from(this.layersVolume, Directory.LAYERS));
+		phase.withBinding(Binding.from(this.applicationVolume, Directory.APPLICATION));
+		phase.withBinding(Binding.from(this.buildCacheVolume, Directory.CACHE));
+		phase.withBinding(Binding.from(this.launchCacheVolume, Directory.LAUNCH_CACHE));
+		if (this.request.getBindings() != null) {
+			this.request.getBindings().forEach(phase::withBinding);
+		}
+		phase.withEnv(PLATFORM_API_VERSION_KEY, this.platformVersion.toString());
 		return phase;
 	}
 
-	private Phase buildPhase() {
-		Phase phase = createPhase("builder");
-		phase.withArgs("-layers", Directory.LAYERS);
-		phase.withArgs("-app", Directory.APPLICATION);
-		phase.withArgs("-platform", Directory.PLATFORM);
-		return phase;
+	private boolean isVerboseLogging() {
+		return this.request.isVerboseLogging() && this.lifecycleVersion.isEqualOrGreaterThan(LOGGING_MINIMUM_VERSION);
 	}
 
-	private Phase exportPhase() {
-		Phase phase = createPhase("exporter");
-		phase.withDaemonAccess();
-		phase.withLogLevelArg();
-		phase.withArgs("-image", this.runImageReference);
-		phase.withArgs("-layers", Directory.LAYERS);
-		phase.withArgs("-app", Directory.APPLICATION);
-		phase.withArgs("-daemon");
-		phase.withArgs("-launch-cache", Directory.LAUNCH_CACHE);
-		phase.withArgs("-cache-dir", Directory.CACHE);
-		phase.withArgs(this.request.getName());
-		phase.withBinds(this.launchCacheVolume, Directory.LAUNCH_CACHE);
-		phase.withBinds(this.buildCacheVolume, Directory.CACHE);
-		return phase;
-	}
-
-	private Phase createPhase(String name) {
-		boolean verboseLogging = this.request.isVerboseLogging()
-				&& this.lifecycleVersion.isEqualOrGreaterThan(LOGGING_MINIMUM_VERSION);
-		Phase phase = new Phase(name, verboseLogging);
-		phase.withBinds(this.layersVolume, Directory.LAYERS);
-		phase.withBinds(this.applicationVolume, Directory.APPLICATION);
-		return phase;
+	private boolean requiresProcessTypeDefault() {
+		return this.platformVersion.supports(ApiVersion.of(0, 4));
 	}
 
 	private void run(Phase phase) throws IOException {

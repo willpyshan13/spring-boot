@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
  * A configuration property name composed of elements separated by dots. User created
@@ -64,6 +65,8 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 
 	private String string;
 
+	private int hashCode;
+
 	private ConfigurationPropertyName(Elements elements) {
 		this.elements = elements;
 		this.uniformElements = new CharSequence[elements.getSize()];
@@ -84,6 +87,20 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 	public boolean isLastElementIndexed() {
 		int size = getNumberOfElements();
 		return (size > 0 && isIndexed(size - 1));
+	}
+
+	/**
+	 * Return {@code true} if any element in the name is indexed.
+	 * @return if the element has one or more indexed elements
+	 * @since 2.2.10
+	 */
+	public boolean hasIndexedElement() {
+		for (int i = 0; i < getNumberOfElements(); i++) {
+			if (isIndexed(i)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -179,17 +196,40 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 	}
 
 	/**
-	 * Create a new {@link ConfigurationPropertyName} by appending the given elements.
-	 * @param elements the elements to append
+	 * Create a new {@link ConfigurationPropertyName} by appending the given suffix.
+	 * @param suffix the elements to append
 	 * @return a new {@link ConfigurationPropertyName}
 	 * @throws InvalidConfigurationPropertyNameException if the result is not valid
 	 */
-	public ConfigurationPropertyName append(String elements) {
-		if (elements == null) {
+	public ConfigurationPropertyName append(String suffix) {
+		if (!StringUtils.hasLength(suffix)) {
 			return this;
 		}
-		Elements additionalElements = probablySingleElementOf(elements);
+		Elements additionalElements = probablySingleElementOf(suffix);
 		return new ConfigurationPropertyName(this.elements.append(additionalElements));
+	}
+
+	/**
+	 * Create a new {@link ConfigurationPropertyName} by appending the given suffix.
+	 * @param suffix the elements to append
+	 * @return a new {@link ConfigurationPropertyName}
+	 * @since 2.5.0
+	 */
+	public ConfigurationPropertyName append(ConfigurationPropertyName suffix) {
+		if (suffix == null) {
+			return this;
+		}
+		return new ConfigurationPropertyName(this.elements.append(suffix.elements));
+	}
+
+	/**
+	 * Return the parent of this {@link ConfigurationPropertyName} or
+	 * {@link ConfigurationPropertyName#EMPTY} if there is no parent.
+	 * @return the parent name
+	 */
+	public ConfigurationPropertyName getParent() {
+		int numberOfElements = getNumberOfElements();
+		return (numberOfElements <= 1) ? EMPTY : chop(numberOfElements - 1);
 	}
 
 	/**
@@ -204,6 +244,27 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 			return this;
 		}
 		return new ConfigurationPropertyName(this.elements.chop(size));
+	}
+
+	/**
+	 * Return a new {@link ConfigurationPropertyName} by based on this name offset by
+	 * specific element index. For example, {@code chop(1)} on the name {@code foo.bar}
+	 * will return {@code bar}.
+	 * @param offset the element offset
+	 * @return the sub name
+	 * @since 2.5.0
+	 */
+	public ConfigurationPropertyName subName(int offset) {
+		if (offset == 0) {
+			return this;
+		}
+		if (offset == getNumberOfElements()) {
+			return EMPTY;
+		}
+		if (offset < 0 || offset > getNumberOfElements()) {
+			throw new IndexOutOfBoundsException("Offset: " + offset + ", NumberOfElements: " + getNumberOfElements());
+		}
+		return new ConfigurationPropertyName(this.elements.subElements(offset));
 	}
 
 	/**
@@ -314,12 +375,68 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 		if (type1.allowsFastEqualityCheck() && type2.allowsFastEqualityCheck()) {
 			return !fastElementEquals(e1, e2, i);
 		}
-		else if (type1.allowsDashIgnoringEqualityCheck() && type2.allowsDashIgnoringEqualityCheck()) {
+		if (type1.allowsDashIgnoringEqualityCheck() && type2.allowsDashIgnoringEqualityCheck()) {
 			return !dashIgnoringElementEquals(e1, e2, i);
 		}
-		else {
-			return !defaultElementEquals(e1, e2, i);
+		return !defaultElementEquals(e1, e2, i);
+	}
+
+	private boolean fastElementEquals(Elements e1, Elements e2, int i) {
+		int length1 = e1.getLength(i);
+		int length2 = e2.getLength(i);
+		if (length1 == length2) {
+			int i1 = 0;
+			while (length1-- != 0) {
+				char ch1 = e1.charAt(i, i1);
+				char ch2 = e2.charAt(i, i1);
+				if (ch1 != ch2) {
+					return false;
+				}
+				i1++;
+			}
+			return true;
 		}
+		return false;
+	}
+
+	private boolean dashIgnoringElementEquals(Elements e1, Elements e2, int i) {
+		int l1 = e1.getLength(i);
+		int l2 = e2.getLength(i);
+		int i1 = 0;
+		int i2 = 0;
+		while (i1 < l1) {
+			if (i2 >= l2) {
+				return false;
+			}
+			char ch1 = e1.charAt(i, i1);
+			char ch2 = e2.charAt(i, i2);
+			if (ch1 == '-') {
+				i1++;
+			}
+			else if (ch2 == '-') {
+				i2++;
+			}
+			else if (ch1 != ch2) {
+				return false;
+			}
+			else {
+				i1++;
+				i2++;
+			}
+		}
+		if (i2 < l2) {
+			if (e2.getType(i).isIndexed()) {
+				return false;
+			}
+			do {
+				char ch2 = e2.charAt(i, i2++);
+				if (ch2 != '-') {
+					return false;
+				}
+			}
+			while (i2 < l2);
+		}
+		return true;
 	}
 
 	private boolean defaultElementEquals(Elements e1, Elements e2, int i) {
@@ -364,67 +481,29 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 		return true;
 	}
 
-	private boolean dashIgnoringElementEquals(Elements e1, Elements e2, int i) {
-		int l1 = e1.getLength(i);
-		int l2 = e2.getLength(i);
-		int i1 = 0;
-		int i2 = 0;
-		while (i1 < l1) {
-			if (i2 >= l2) {
-				return false;
-			}
-			char ch1 = e1.charAt(i, i1);
-			char ch2 = e2.charAt(i, i2);
-			if (ch1 == '-') {
-				i1++;
-			}
-			else if (ch2 == '-') {
-				i2++;
-			}
-			else if (ch1 != ch2) {
-				return false;
-			}
-			else {
-				i1++;
-				i2++;
-			}
-		}
-		if (i2 < l2) {
-			if (e2.getType(i).isIndexed()) {
-				return false;
-			}
-			do {
-				char ch2 = e2.charAt(i, i2++);
-				if (ch2 != '-') {
-					return false;
-				}
-			}
-			while (i2 < l2);
-		}
-		return true;
-	}
-
-	private boolean fastElementEquals(Elements e1, Elements e2, int i) {
-		int length1 = e1.getLength(i);
-		int length2 = e2.getLength(i);
-		if (length1 == length2) {
-			int i1 = 0;
-			while (length1-- != 0) {
-				char ch1 = e1.charAt(i, i1);
-				char ch2 = e2.charAt(i, i1);
-				if (ch1 != ch2) {
-					return false;
-				}
-				i1++;
-			}
-			return true;
-		}
-		return false;
-	}
-
 	@Override
 	public int hashCode() {
-		return 0;
+		int hashCode = this.hashCode;
+		Elements elements = this.elements;
+		if (hashCode == 0 && elements.getSize() != 0) {
+			for (int elementIndex = 0; elementIndex < elements.getSize(); elementIndex++) {
+				int elementHashCode = 0;
+				boolean indexed = elements.getType(elementIndex).isIndexed();
+				int length = elements.getLength(elementIndex);
+				for (int i = 0; i < length; i++) {
+					char ch = elements.charAt(elementIndex, i);
+					if (!indexed) {
+						ch = Character.toLowerCase(ch);
+					}
+					if (ElementsParser.isAlphaNumeric(ch)) {
+						elementHashCode = 31 * elementHashCode + ch;
+					}
+				}
+				hashCode = 31 * hashCode + elementHashCode;
+			}
+			this.hashCode = hashCode;
+		}
+		return hashCode;
 	}
 
 	@Override
@@ -476,6 +555,17 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 	 */
 	public static ConfigurationPropertyName of(CharSequence name) {
 		return of(name, false);
+	}
+
+	/**
+	 * Return a {@link ConfigurationPropertyName} for the specified string or {@code null}
+	 * if the name is not valid.
+	 * @param name the source name
+	 * @return a {@link ConfigurationPropertyName} instance
+	 * @since 2.3.1
+	 */
+	public static ConfigurationPropertyName ofIfValid(CharSequence name) {
+		return of(name, true);
 	}
 
 	/**
@@ -673,6 +763,18 @@ public final class ConfigurationPropertyName implements Comparable<Configuration
 		Elements chop(int size) {
 			CharSequence[] resolved = newResolved(size);
 			return new Elements(this.source, size, this.start, this.end, this.type, resolved);
+		}
+
+		Elements subElements(int offset) {
+			int size = this.size - offset;
+			CharSequence[] resolved = newResolved(size);
+			int[] start = new int[size];
+			System.arraycopy(this.start, offset, start, 0, size);
+			int[] end = new int[size];
+			System.arraycopy(this.end, offset, end, 0, size);
+			ElementType[] type = new ElementType[size];
+			System.arraycopy(this.type, offset, type, 0, size);
+			return new Elements(this.source, size, start, end, type, resolved);
 		}
 
 		private CharSequence[] newResolved(int size) {

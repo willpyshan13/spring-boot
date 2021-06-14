@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ import org.springframework.util.StringUtils;
  * Configuration used when creating a new container.
  *
  * @author Phillip Webb
+ * @author Scott Frederick
  * @since 2.3.0
  */
 public class ContainerConfig {
@@ -46,7 +47,7 @@ public class ContainerConfig {
 	private final String json;
 
 	ContainerConfig(String user, ImageReference image, String command, List<String> args, Map<String, String> labels,
-			Map<String, String> binds) throws IOException {
+			List<Binding> bindings, Map<String, String> env) throws IOException {
 		Assert.notNull(image, "Image must not be null");
 		Assert.hasText(command, "Command must not be empty");
 		ObjectMapper objectMapper = SharedObjectMapper.get();
@@ -58,11 +59,13 @@ public class ContainerConfig {
 		ArrayNode commandNode = node.putArray("Cmd");
 		commandNode.add(command);
 		args.forEach(commandNode::add);
+		ArrayNode envNode = node.putArray("Env");
+		env.forEach((name, value) -> envNode.add(name + "=" + value));
 		ObjectNode labelsNode = node.putObject("Labels");
 		labels.forEach(labelsNode::put);
 		ObjectNode hostConfigNode = node.putObject("HostConfig");
 		ArrayNode bindsNode = hostConfigNode.putArray("Binds");
-		binds.forEach((source, dest) -> bindsNode.add(source + ":" + dest));
+		bindings.forEach((binding) -> bindsNode.add(binding.toString()));
 		this.json = objectMapper.writeValueAsString(node);
 	}
 
@@ -107,7 +110,9 @@ public class ContainerConfig {
 
 		private final Map<String, String> labels = new LinkedHashMap<>();
 
-		private final Map<String, String> binds = new LinkedHashMap<>();
+		private final List<Binding> bindings = new ArrayList<>();
+
+		private final Map<String, String> env = new LinkedHashMap<>();
 
 		Update(ImageReference image) {
 			this.image = image;
@@ -116,7 +121,8 @@ public class ContainerConfig {
 		private ContainerConfig run(Consumer<Update> update) {
 			update.accept(this);
 			try {
-				return new ContainerConfig(this.user, this.image, this.command, this.args, this.labels, this.binds);
+				return new ContainerConfig(this.user, this.image, this.command, this.args, this.labels, this.bindings,
+						this.env);
 			}
 			catch (IOException ex) {
 				throw new IllegalStateException(ex);
@@ -160,21 +166,20 @@ public class ContainerConfig {
 		}
 
 		/**
-		 * Update the container config with an additional bind.
-		 * @param sourceVolume the source volume
-		 * @param dest the bind destination
+		 * Update the container config with an additional binding.
+		 * @param binding the binding
 		 */
-		public void withBind(VolumeName sourceVolume, String dest) {
-			this.binds.put(sourceVolume.toString(), dest);
+		public void withBinding(Binding binding) {
+			this.bindings.add(binding);
 		}
 
 		/**
-		 * Update the container config with an additional bind.
-		 * @param source the bind source
-		 * @param dest the bind destination
+		 * Update the container config with an additional environment variable.
+		 * @param name the variable name
+		 * @param value the variable value
 		 */
-		public void withBind(String source, String dest) {
-			this.binds.put(source, dest);
+		public void withEnv(String name, String value) {
+			this.env.put(name, value);
 		}
 
 	}

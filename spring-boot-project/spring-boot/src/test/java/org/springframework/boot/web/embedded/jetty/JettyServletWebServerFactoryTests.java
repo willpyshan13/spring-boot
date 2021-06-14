@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,16 @@
 
 package org.springframework.boot.web.embedded.jetty;
 
+import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EventListener;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -35,6 +38,7 @@ import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
 import org.apache.http.conn.HttpHostConnectException;
 import org.apache.http.impl.client.HttpClients;
+import org.awaitility.Awaitility;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Server;
@@ -44,6 +48,7 @@ import org.eclipse.jetty.server.handler.ErrorHandler;
 import org.eclipse.jetty.server.handler.HandlerCollection;
 import org.eclipse.jetty.server.handler.HandlerWrapper;
 import org.eclipse.jetty.servlet.ErrorPageErrorHandler;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.eclipse.jetty.util.thread.ThreadPool;
 import org.eclipse.jetty.webapp.AbstractConfiguration;
@@ -52,10 +57,12 @@ import org.eclipse.jetty.webapp.WebAppContext;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
+import org.springframework.boot.web.server.GracefulShutdownResult;
 import org.springframework.boot.web.server.Shutdown;
 import org.springframework.boot.web.server.Ssl;
 import org.springframework.boot.web.server.WebServerException;
 import org.springframework.boot.web.servlet.server.AbstractServletWebServerFactory;
+import org.springframework.util.ReflectionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -74,7 +81,7 @@ import static org.mockito.Mockito.mock;
 class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFactoryTests {
 
 	@Test
-	void correctVersionOfJettyUsed() {
+	protected void correctVersionOfJettyUsed() {
 		String jettyVersion = ErrorHandler.class.getPackage().getImplementationVersion();
 		Matcher matcher = Pattern.compile("[0-9]+.[0-9]+.([0-9]+)[\\.-].*").matcher(jettyVersion);
 		assertThat(matcher.find()).isTrue();
@@ -82,7 +89,7 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 	}
 
 	@Test
-	void jettyConfigurations() throws Exception {
+	protected void jettyConfigurations() throws Exception {
 		JettyServletWebServerFactory factory = getFactory();
 		Configuration[] configurations = new Configuration[4];
 		Arrays.setAll(configurations, (i) -> mock(Configuration.class));
@@ -140,9 +147,9 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		JettyWebServer jettyWebServer = (JettyWebServer) this.webServer;
 		ServerConnector connector = (ServerConnector) jettyWebServer.getServer().getConnectors()[0];
 		SslConnectionFactory connectionFactory = connector.getConnectionFactory(SslConnectionFactory.class);
-		assertThat(connectionFactory.getSslContextFactory().getIncludeCipherSuites()).containsExactly("ALPHA", "BRAVO",
-				"CHARLIE");
-		assertThat(connectionFactory.getSslContextFactory().getExcludeCipherSuites()).isEmpty();
+		SslContextFactory sslContextFactory = extractSslContextFactory(connectionFactory);
+		assertThat(sslContextFactory.getIncludeCipherSuites()).containsExactly("ALPHA", "BRAVO", "CHARLIE");
+		assertThat(sslContextFactory.getExcludeCipherSuites()).isEmpty();
 	}
 
 	@Test
@@ -163,8 +170,8 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		JettyWebServer jettyWebServer = (JettyWebServer) this.webServer;
 		ServerConnector connector = (ServerConnector) jettyWebServer.getServer().getConnectors()[0];
 		SslConnectionFactory connectionFactory = connector.getConnectionFactory(SslConnectionFactory.class);
-		assertThat(connectionFactory.getSslContextFactory().getIncludeProtocols()).containsExactly("TLSv1.1",
-				"TLSv1.2");
+		SslContextFactory sslContextFactory = extractSslContextFactory(connectionFactory);
+		assertThat(sslContextFactory.getIncludeProtocols()).containsExactly("TLSv1.1", "TLSv1.2");
 	}
 
 	@Test
@@ -176,15 +183,25 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		JettyWebServer jettyWebServer = (JettyWebServer) this.webServer;
 		ServerConnector connector = (ServerConnector) jettyWebServer.getServer().getConnectors()[0];
 		SslConnectionFactory connectionFactory = connector.getConnectionFactory(SslConnectionFactory.class);
-		assertThat(connectionFactory.getSslContextFactory().getIncludeProtocols()).containsExactly("TLSv1.1");
+		SslContextFactory sslContextFactory = extractSslContextFactory(connectionFactory);
+		assertThat(sslContextFactory.getIncludeProtocols()).containsExactly("TLSv1.1");
+	}
+
+	private SslContextFactory extractSslContextFactory(SslConnectionFactory connectionFactory) {
+		try {
+			return connectionFactory.getSslContextFactory();
+		}
+		catch (NoSuchMethodError ex) {
+			Method getSslContextFactory = ReflectionUtils.findMethod(connectionFactory.getClass(),
+					"getSslContextFactory");
+			return (SslContextFactory) ReflectionUtils.invokeMethod(getSslContextFactory, connectionFactory);
+		}
 	}
 
 	@Test
 	void whenServerIsShuttingDownGracefullyThenNewConnectionsCannotBeMade() throws Exception {
 		AbstractServletWebServerFactory factory = getFactory();
-		Shutdown shutdown = new Shutdown();
-		shutdown.setGracePeriod(Duration.ofSeconds(5));
-		factory.setShutdown(shutdown);
+		factory.setShutdown(Shutdown.GRACEFUL);
 		BlockingServlet blockingServlet = new BlockingServlet();
 		this.webServer = factory.getWebServer((context) -> {
 			Dynamic registration = context.addServlet("blockingServlet", blockingServlet);
@@ -195,9 +212,9 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		int port = this.webServer.getPort();
 		Future<Object> request = initiateGetRequest(port, "/blocking");
 		blockingServlet.awaitQueue();
-		Future<Boolean> shutdownResult = initiateGracefulShutdown();
+		this.webServer.shutDownGracefully((result) -> {
+		});
 		Future<Object> unconnectableRequest = initiateGetRequest(port, "/");
-		assertThat(shutdownResult.get()).isEqualTo(false);
 		blockingServlet.admitOne();
 		Object response = request.get();
 		assertThat(response).isInstanceOf(HttpResponse.class);
@@ -209,9 +226,7 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 	void whenServerIsShuttingDownGracefullyThenResponseToRequestOnIdleConnectionWillHaveAConnectionCloseHeader()
 			throws Exception {
 		AbstractServletWebServerFactory factory = getFactory();
-		Shutdown shutdown = new Shutdown();
-		shutdown.setGracePeriod(Duration.ofSeconds(5));
-		factory.setShutdown(shutdown);
+		factory.setShutdown(Shutdown.GRACEFUL);
 		BlockingServlet blockingServlet = new BlockingServlet();
 		this.webServer = factory.getWebServer((context) -> {
 			Dynamic registration = context.addServlet("blockingServlet", blockingServlet);
@@ -228,7 +243,8 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		assertThat(response).isInstanceOf(HttpResponse.class);
 		assertThat(((HttpResponse) response).getStatusLine().getStatusCode()).isEqualTo(200);
 		assertThat(((HttpResponse) response).getFirstHeader("Connection")).isNull();
-		this.webServer.shutDownGracefully();
+		this.webServer.shutDownGracefully((result) -> {
+		});
 		request = initiateGetRequest(client, port, "/blocking");
 		blockingServlet.awaitQueue();
 		blockingServlet.admitOne();
@@ -244,9 +260,7 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 	void whenARequestCompletesAfterGracefulShutdownHasBegunThenItHasAConnectionCloseHeader()
 			throws InterruptedException, ExecutionException {
 		AbstractServletWebServerFactory factory = getFactory();
-		Shutdown shutdown = new Shutdown();
-		shutdown.setGracePeriod(Duration.ofSeconds(30));
-		factory.setShutdown(shutdown);
+		factory.setShutdown(Shutdown.GRACEFUL);
 		BlockingServlet blockingServlet = new BlockingServlet();
 		this.webServer = factory.getWebServer((context) -> {
 			Dynamic registration = context.addServlet("blockingServlet", blockingServlet);
@@ -257,12 +271,10 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 		int port = this.webServer.getPort();
 		Future<Object> request = initiateGetRequest(port, "/blocking");
 		blockingServlet.awaitQueue();
-		long start = System.currentTimeMillis();
-		Future<Boolean> shutdownResult = initiateGracefulShutdown();
+		AtomicReference<GracefulShutdownResult> result = new AtomicReference<>();
+		this.webServer.shutDownGracefully(result::set);
 		blockingServlet.admitOne();
-		assertThat(shutdownResult.get()).isTrue();
-		long end = System.currentTimeMillis();
-		assertThat(end - start).isLessThanOrEqualTo(30000);
+		Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> GracefulShutdownResult.IDLE == result.get());
 		Object requestResult = request.get();
 		assertThat(requestResult).isInstanceOf(HttpResponse.class);
 		assertThat(((HttpResponse) requestResult).getFirstHeader("Connection").getValue()).isEqualTo("close");
@@ -281,8 +293,7 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 	private void assertTimeout(JettyServletWebServerFactory factory, int expected) {
 		this.webServer = factory.getWebServer();
 		JettyWebServer jettyWebServer = (JettyWebServer) this.webServer;
-		Handler[] handlers = jettyWebServer.getServer().getChildHandlersByClass(WebAppContext.class);
-		WebAppContext webAppContext = (WebAppContext) handlers[0];
+		WebAppContext webAppContext = findWebAppContext(jettyWebServer);
 		int actual = webAppContext.getSessionHandler().getMaxInactiveInterval();
 		assertThat(actual).isEqualTo(expected);
 	}
@@ -373,11 +384,11 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 	}
 
 	@Test
-	void faultyListenerCausesStartFailure() throws Exception {
+	void faultyListenerCausesStartFailure() {
 		JettyServletWebServerFactory factory = getFactory();
 		factory.addServerCustomizers((JettyServerCustomizer) (server) -> {
 			Collection<WebAppContext> contexts = server.getBeans(WebAppContext.class);
-			contexts.iterator().next().addEventListener(new ServletContextListener() {
+			EventListener eventListener = new ServletContextListener() {
 
 				@Override
 				public void contextInitialized(ServletContextEvent event) {
@@ -387,8 +398,17 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 				@Override
 				public void contextDestroyed(ServletContextEvent event) {
 				}
-
-			});
+			};
+			WebAppContext context = contexts.iterator().next();
+			try {
+				context.addEventListener(eventListener);
+			}
+			catch (NoSuchMethodError ex) {
+				// Jetty 10
+				Method addEventListener = ReflectionUtils.findMethod(context.getClass(), "addEventListener",
+						EventListener.class);
+				ReflectionUtils.invokeMethod(addEventListener, context, eventListener);
+			}
 		});
 		assertThatExceptionOfType(WebServerException.class).isThrownBy(() -> {
 			JettyWebServer jettyWebServer = (JettyWebServer) factory.getWebServer();
@@ -414,7 +434,7 @@ class JettyServletWebServerFactoryTests extends AbstractJettyServletWebServerFac
 
 		});
 		JettyWebServer jettyWebServer = (JettyWebServer) factory.getWebServer();
-		WebAppContext context = (WebAppContext) jettyWebServer.getServer().getHandler();
+		WebAppContext context = findWebAppContext(jettyWebServer);
 		assertThat(context.getErrorHandler()).isInstanceOf(CustomErrorHandler.class);
 	}
 

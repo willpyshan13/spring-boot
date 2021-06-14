@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -180,7 +180,7 @@ class BasicErrorControllerMockMvcTests {
 			}
 
 			@RequestMapping("/noContent")
-			void noContent() throws Exception {
+			void noContent() {
 				throw new NoContentException("Expected!");
 			}
 
@@ -212,9 +212,9 @@ class BasicErrorControllerMockMvcTests {
 
 	private class ErrorDispatcher implements RequestBuilder {
 
-		private MvcResult result;
+		private final MvcResult result;
 
-		private String path;
+		private final String path;
 
 		ErrorDispatcher(MvcResult result, String path) {
 			this.result = result;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package org.springframework.boot.maven;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.function.Function;
 
@@ -26,6 +27,9 @@ import org.apache.maven.artifact.versioning.VersionRange;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.buildpack.platform.build.BuildRequest;
+import org.springframework.boot.buildpack.platform.build.BuildpackReference;
+import org.springframework.boot.buildpack.platform.build.PullPolicy;
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 import org.springframework.boot.buildpack.platform.io.Owner;
 import org.springframework.boot.buildpack.platform.io.TarArchive;
 
@@ -36,6 +40,7 @@ import static org.assertj.core.api.Assertions.entry;
  * Tests for {@link Image}.
  *
  * @author Phillip Webb
+ * @author Scott Frederick
  */
 class ImageTests {
 
@@ -57,10 +62,14 @@ class ImageTests {
 	void getBuildRequestWhenNoCustomizationsUsesDefaults() {
 		BuildRequest request = new Image().getBuildRequest(createArtifact(), mockApplicationContent());
 		assertThat(request.getName().toString()).isEqualTo("docker.io/library/my-app:0.0.1-SNAPSHOT");
-		assertThat(request.getBuilder().toString()).contains("paketo-buildpacks/builder");
+		assertThat(request.getBuilder().toString()).contains("paketobuildpacks/builder");
+		assertThat(request.getRunImage()).isNull();
 		assertThat(request.getEnv()).isEmpty();
 		assertThat(request.isCleanCache()).isFalse();
 		assertThat(request.isVerboseLogging()).isFalse();
+		assertThat(request.getPullPolicy()).isEqualTo(PullPolicy.ALWAYS);
+		assertThat(request.getBuildpacks()).isEmpty();
+		assertThat(request.getBindings()).isEmpty();
 	}
 
 	@Test
@@ -69,6 +78,14 @@ class ImageTests {
 		image.builder = "springboot/builder:2.2.x";
 		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
 		assertThat(request.getBuilder().toString()).isEqualTo("docker.io/springboot/builder:2.2.x");
+	}
+
+	@Test
+	void getBuildRequestWhenHasRunImageUsesRunImage() {
+		Image image = new Image();
+		image.runImage = "springboot/run:latest";
+		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
+		assertThat(request.getRunImage().toString()).isEqualTo("docker.io/springboot/run:latest");
 	}
 
 	@Test
@@ -93,6 +110,40 @@ class ImageTests {
 		image.verboseLogging = true;
 		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
 		assertThat(request.isVerboseLogging()).isTrue();
+	}
+
+	@Test
+	void getBuildRequestWhenHasPullPolicyUsesPullPolicy() {
+		Image image = new Image();
+		image.setPullPolicy(PullPolicy.NEVER);
+		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
+		assertThat(request.getPullPolicy()).isEqualTo(PullPolicy.NEVER);
+	}
+
+	@Test
+	void getBuildRequestWhenHasPublishUsesPublish() {
+		Image image = new Image();
+		image.publish = true;
+		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
+		assertThat(request.isPublish()).isTrue();
+	}
+
+	@Test
+	void getBuildRequestWhenHasBuildpacksUsesBuildpacks() {
+		Image image = new Image();
+		image.buildpacks = Arrays.asList("example/buildpack1@0.0.1", "example/buildpack2@0.0.2");
+		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
+		assertThat(request.getBuildpacks()).containsExactly(BuildpackReference.of("example/buildpack1@0.0.1"),
+				BuildpackReference.of("example/buildpack2@0.0.2"));
+	}
+
+	@Test
+	void getBuildRequestWhenHasBindingsUsesBindings() {
+		Image image = new Image();
+		image.bindings = Arrays.asList("host-src:container-dest:ro", "volume-name:container-dest:rw");
+		BuildRequest request = image.getBuildRequest(createArtifact(), mockApplicationContent());
+		assertThat(request.getBindings()).containsExactly(Binding.of("host-src:container-dest:ro"),
+				Binding.of("volume-name:container-dest:rw"));
 	}
 
 	private Artifact createArtifact() {

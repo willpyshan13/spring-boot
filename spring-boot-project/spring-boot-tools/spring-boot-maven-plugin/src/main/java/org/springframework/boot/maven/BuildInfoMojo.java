@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ import org.springframework.boot.loader.tools.BuildPropertiesWriter.NullAdditiona
 import org.springframework.boot.loader.tools.BuildPropertiesWriter.ProjectDetails;
 
 /**
- * Generate a {@code build-info.properties} file based the content of the current
+ * Generate a {@code build-info.properties} file based on the content of the current
  * {@link MavenProject}.
  *
  * @author Stephane Nicoll
@@ -62,23 +62,25 @@ public class BuildInfoMojo extends AbstractMojo {
 	private MavenProject project;
 
 	/**
-	 * The location of the generated build-info.properties.
+	 * The location of the generated {@code build-info.properties} file.
 	 */
 	@Parameter(defaultValue = "${project.build.outputDirectory}/META-INF/build-info.properties")
 	private File outputFile;
 
 	/**
 	 * The value used for the {@code build.time} property in a form suitable for
-	 * {@link Instant#parse(CharSequence)}. Defaults to {@code session.request.startTime}.
-	 * To disable the {@code build.time} property entirely, use {@code 'off'}.
+	 * {@link Instant#parse(CharSequence)}. Defaults to
+	 * {@code project.build.outputTimestamp} or {@code session.request.startTime} if the
+	 * former is not set. To disable the {@code build.time} property entirely, use
+	 * {@code 'off'}.
 	 * @since 2.2.0
 	 */
-	@Parameter
+	@Parameter(defaultValue = "${project.build.outputTimestamp}")
 	private String time;
 
 	/**
-	 * Additional properties to store in the build-info.properties. Each entry is prefixed
-	 * by {@code build.} in the generated build-info.properties.
+	 * Additional properties to store in the {@code build-info.properties} file. Each
+	 * entry is prefixed by {@code build.} in the generated {@code build-info.properties}.
 	 */
 	@Parameter
 	private Map<String, String> additionalProperties;

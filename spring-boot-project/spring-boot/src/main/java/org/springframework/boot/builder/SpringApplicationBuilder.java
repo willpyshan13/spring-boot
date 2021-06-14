@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,10 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.support.BeanNameGenerator;
+import org.springframework.boot.ApplicationContextFactory;
 import org.springframework.boot.Banner;
+import org.springframework.boot.BootstrapRegistry;
+import org.springframework.boot.BootstrapRegistryInitializer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.convert.ApplicationConversionService;
@@ -39,6 +42,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.core.metrics.ApplicationStartup;
 import org.springframework.util.StringUtils;
 
 /**
@@ -75,7 +79,7 @@ public class SpringApplicationBuilder {
 
 	private SpringApplicationBuilder parent;
 
-	private final AtomicBoolean running = new AtomicBoolean(false);
+	private final AtomicBoolean running = new AtomicBoolean();
 
 	private final Set<Class<?>> sources = new LinkedHashSet<>();
 
@@ -272,9 +276,23 @@ public class SpringApplicationBuilder {
 	 * Explicitly set the context class to be used.
 	 * @param cls the context class to use
 	 * @return the current builder
+	 * @deprecated since 2.4.0 for removal in 2.6.0 in favor of
+	 * {@link #contextFactory(ApplicationContextFactory)}
 	 */
+	@Deprecated
 	public SpringApplicationBuilder contextClass(Class<? extends ConfigurableApplicationContext> cls) {
 		this.application.setApplicationContextClass(cls);
+		return this;
+	}
+
+	/**
+	 * Explicitly set the factory used to create the application context.
+	 * @param factory the factory to use
+	 * @return the current builder
+	 * @since 2.4.0
+	 */
+	public SpringApplicationBuilder contextFactory(ApplicationContextFactory factory) {
+		this.application.setApplicationContextFactory(factory);
 		return this;
 	}
 
@@ -382,13 +400,31 @@ public class SpringApplicationBuilder {
 	}
 
 	/**
-	 * Default properties for the environment in the form {@code key=value} or
-	 * {@code key:value}.
-	 * @param defaultProperties the properties to set.
+	 * Adds a {@link org.springframework.boot.Bootstrapper} that can be used to initialize
+	 * the {@link BootstrapRegistry}.
+	 * @param bootstrapper the bootstraper
 	 * @return the current builder
+	 * @since 2.4.0
+	 * @deprecated since 2.4.5 for removal in 2.6 in favor of
+	 * {@link #addBootstrapRegistryInitializer(BootstrapRegistryInitializer)}
 	 */
-	public SpringApplicationBuilder properties(String... defaultProperties) {
-		return properties(getMapFromKeyValuePairs(defaultProperties));
+	@Deprecated
+	public SpringApplicationBuilder addBootstrapper(org.springframework.boot.Bootstrapper bootstrapper) {
+		this.application.addBootstrapper(bootstrapper);
+		return this;
+	}
+
+	/**
+	 * Adds {@link BootstrapRegistryInitializer} instances that can be used to initialize
+	 * the {@link BootstrapRegistry}.
+	 * @param bootstrapRegistryInitializer the bootstrap registry initializer to add
+	 * @return the current builder
+	 * @since 2.4.5
+	 */
+	public SpringApplicationBuilder addBootstrapRegistryInitializer(
+			BootstrapRegistryInitializer bootstrapRegistryInitializer) {
+		this.application.addBootstrapRegistryInitializer(bootstrapRegistryInitializer);
+		return this;
 	}
 
 	/**
@@ -400,6 +436,19 @@ public class SpringApplicationBuilder {
 	public SpringApplicationBuilder lazyInitialization(boolean lazyInitialization) {
 		this.application.setLazyInitialization(lazyInitialization);
 		return this;
+	}
+
+	/**
+	 * Default properties for the environment in the form {@code key=value} or
+	 * {@code key:value}. Multiple calls to this method are cumulative and will not clear
+	 * any previously set properties.
+	 * @param defaultProperties the properties to set.
+	 * @return the current builder
+	 * @see SpringApplicationBuilder#properties(Properties)
+	 * @see SpringApplicationBuilder#properties(Map)
+	 */
+	public SpringApplicationBuilder properties(String... defaultProperties) {
+		return properties(getMapFromKeyValuePairs(defaultProperties));
 	}
 
 	private Map<String, Object> getMapFromKeyValuePairs(String[] properties) {
@@ -425,10 +474,12 @@ public class SpringApplicationBuilder {
 	}
 
 	/**
-	 * Default properties for the environment in the form {@code key=value} or
-	 * {@code key:value}.
+	 * Default properties for the environment.Multiple calls to this method are cumulative
+	 * and will not clear any previously set properties.
 	 * @param defaultProperties the properties to set.
 	 * @return the current builder
+	 * @see SpringApplicationBuilder#properties(String...)
+	 * @see SpringApplicationBuilder#properties(Map)
 	 */
 	public SpringApplicationBuilder properties(Properties defaultProperties) {
 		return properties(getMapFromProperties(defaultProperties));
@@ -444,10 +495,11 @@ public class SpringApplicationBuilder {
 
 	/**
 	 * Default properties for the environment. Multiple calls to this method are
-	 * cumulative.
+	 * cumulative and will not clear any previously set properties.
 	 * @param defaults the default properties
 	 * @return the current builder
 	 * @see SpringApplicationBuilder#properties(String...)
+	 * @see SpringApplicationBuilder#properties(Properties)
 	 */
 	public SpringApplicationBuilder properties(Map<String, Object> defaults) {
 		this.defaultProperties.putAll(defaults);
@@ -499,6 +551,18 @@ public class SpringApplicationBuilder {
 	}
 
 	/**
+	 * Prefix that should be applied when obtaining configuration properties from the
+	 * system environment.
+	 * @param environmentPrefix the environment property prefix to set
+	 * @return the current builder
+	 * @since 2.5.0
+	 */
+	public SpringApplicationBuilder environmentPrefix(String environmentPrefix) {
+		this.application.setEnvironmentPrefix(environmentPrefix);
+		return this;
+	}
+
+	/**
 	 * {@link ResourceLoader} for the application context. If a custom class loader is
 	 * needed, this is where it would be added.
 	 * @param resourceLoader the resource loader to set.
@@ -530,6 +594,18 @@ public class SpringApplicationBuilder {
 	 */
 	public SpringApplicationBuilder listeners(ApplicationListener<?>... listeners) {
 		this.application.addListeners(listeners);
+		return this;
+	}
+
+	/**
+	 * Configure the {@link ApplicationStartup} to be used with the
+	 * {@link ApplicationContext} for collecting startup metrics.
+	 * @param applicationStartup the application startup to use
+	 * @return the current builder
+	 * @since 2.4.0
+	 */
+	public SpringApplicationBuilder applicationStartup(ApplicationStartup applicationStartup) {
+		this.application.setApplicationStartup(applicationStartup);
 		return this;
 	}
 

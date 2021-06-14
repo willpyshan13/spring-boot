@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,13 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Handler;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -41,6 +44,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 import org.slf4j.impl.StaticLoggerBinder;
 
+import org.springframework.boot.DefaultBootstrapContext;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.context.event.ApplicationFailedEvent;
 import org.springframework.boot.context.event.ApplicationStartingEvent;
@@ -97,6 +101,8 @@ class LoggingApplicationListenerTests {
 
 	private final ch.qos.logback.classic.Logger logger = this.loggerContext.getLogger(getClass());
 
+	private final DefaultBootstrapContext bootstrapContext = new DefaultBootstrapContext();
+
 	private final SpringApplication springApplication = new SpringApplication();
 
 	private final GenericApplicationContext context = new GenericApplicationContext();
@@ -106,21 +112,24 @@ class LoggingApplicationListenerTests {
 
 	private File logFile;
 
+	private Set<Object> systemPropertyNames;
+
 	private CapturedOutput output;
 
 	@BeforeEach
-	void init(CapturedOutput output) throws SecurityException, IOException {
+	void init(CapturedOutput output) throws IOException {
+		this.systemPropertyNames = new HashSet<>(System.getProperties().keySet());
 		this.output = output;
 		this.logFile = new File(this.tempDir.toFile(), "foo.log");
 		LogManager.getLogManager().readConfiguration(JavaLoggingSystem.class.getResourceAsStream("logging.properties"));
-		multicastEvent(new ApplicationStartingEvent(new SpringApplication(), NO_ARGS));
+		multicastEvent(new ApplicationStartingEvent(this.bootstrapContext, new SpringApplication(), NO_ARGS));
 		new File(this.tempDir.toFile(), "spring.log").delete();
 		ConfigurableEnvironment environment = this.context.getEnvironment();
 		ConfigurationPropertySources.attach(environment);
 	}
 
 	@AfterEach
-	void clear() throws IOException {
+	void clear() {
 		LoggingSystem loggingSystem = LoggingSystem.get(getClass().getClassLoader());
 		loggingSystem.setLogLevel("ROOT", LogLevel.INFO);
 		loggingSystem.cleanUp();
@@ -128,15 +137,8 @@ class LoggingApplicationListenerTests {
 			loggingSystem.getShutdownHandler().run();
 		}
 		System.clearProperty(LoggingSystem.class.getName());
-		System.clearProperty(LoggingSystemProperties.LOG_FILE);
-		System.clearProperty(LoggingSystemProperties.LOG_PATH);
-		System.clearProperty(LoggingSystemProperties.PID_KEY);
-		System.clearProperty(LoggingSystemProperties.EXCEPTION_CONVERSION_WORD);
-		System.clearProperty(LoggingSystemProperties.CONSOLE_LOG_PATTERN);
-		System.clearProperty(LoggingSystemProperties.FILE_LOG_PATTERN);
-		System.clearProperty(LoggingSystemProperties.LOG_LEVEL_PATTERN);
-		System.clearProperty(LoggingSystemProperties.ROLLING_FILE_NAME_PATTERN);
 		System.clearProperty(LoggingSystem.SYSTEM_PROPERTY);
+		System.getProperties().keySet().retainAll(this.systemPropertyNames);
 		if (this.context != null) {
 			this.context.close();
 		}
@@ -161,13 +163,21 @@ class LoggingApplicationListenerTests {
 	}
 
 	@Test
+	void trailingWhitespaceInLoggingConfigShouldBeTrimmed() {
+		addPropertiesToEnvironment(this.context, "logging.config=classpath:logback-nondefault.xml ");
+		this.initializer.initialize(this.context.getEnvironment(), this.context.getClassLoader());
+		this.logger.info("Hello world");
+		assertThat(this.output).contains("Hello world").doesNotContain("???").startsWith("null ").endsWith("BOOTBOOT");
+	}
+
+	@Test
 	void overrideConfigDoesNotExist() {
 		addPropertiesToEnvironment(this.context, "logging.config=doesnotexist.xml");
-		assertThatIllegalStateException().isThrownBy(() -> {
-			this.initializer.initialize(this.context.getEnvironment(), this.context.getClassLoader());
-			assertThat(this.output)
-					.contains("Logging system failed to initialize using configuration from 'doesnotexist.xml'");
-		});
+		assertThatIllegalStateException().isThrownBy(
+				() -> this.initializer.initialize(this.context.getEnvironment(), this.context.getClassLoader()));
+		assertThat(this.output)
+				.contains("Logging system failed to initialize using configuration from 'doesnotexist.xml'")
+				.doesNotContain("JoranException");
 	}
 
 	@Test
@@ -364,7 +374,8 @@ class LoggingApplicationListenerTests {
 	void parseArgsDoesntReplace() {
 		this.initializer.setSpringBootLogging(LogLevel.ERROR);
 		this.initializer.setParseArgs(false);
-		multicastEvent(new ApplicationStartingEvent(this.springApplication, new String[] { "--debug" }));
+		multicastEvent(new ApplicationStartingEvent(this.bootstrapContext, this.springApplication,
+				new String[] { "--debug" }));
 		this.initializer.initialize(this.context.getEnvironment(), this.context.getClassLoader());
 		this.logger.debug("testatdebug");
 		assertThat(this.output).doesNotContain("testatdebug");
@@ -395,30 +406,36 @@ class LoggingApplicationListenerTests {
 	}
 
 	@Test
-	void shutdownHookIsNotRegisteredByDefault() {
+	void shutdownHookIsRegisteredByDefault() throws Exception {
 		TestLoggingApplicationListener listener = new TestLoggingApplicationListener();
+		Object registered = ReflectionTestUtils.getField(listener, TestLoggingApplicationListener.class,
+				"shutdownHookRegistered");
+		((AtomicBoolean) registered).set(false);
 		System.setProperty(LoggingSystem.class.getName(), TestShutdownHandlerLoggingSystem.class.getName());
-		multicastEvent(listener, new ApplicationStartingEvent(new SpringApplication(), NO_ARGS));
+		multicastEvent(listener, new ApplicationStartingEvent(this.bootstrapContext, new SpringApplication(), NO_ARGS));
+		listener.initialize(this.context.getEnvironment(), this.context.getClassLoader());
+		assertThat(listener.shutdownHook).isNotNull();
+		listener.shutdownHook.run();
+		assertThat(TestShutdownHandlerLoggingSystem.shutdownLatch.await(30, TimeUnit.SECONDS)).isTrue();
+	}
+
+	@Test
+	void shutdownHookRegistrationCanBeDisabled() {
+		TestLoggingApplicationListener listener = new TestLoggingApplicationListener();
+		Object registered = ReflectionTestUtils.getField(listener, TestLoggingApplicationListener.class,
+				"shutdownHookRegistered");
+		((AtomicBoolean) registered).set(false);
+		System.setProperty(LoggingSystem.class.getName(), TestShutdownHandlerLoggingSystem.class.getName());
+		addPropertiesToEnvironment(this.context, "logging.register_shutdown_hook=false");
+		multicastEvent(listener, new ApplicationStartingEvent(this.bootstrapContext, new SpringApplication(), NO_ARGS));
 		listener.initialize(this.context.getEnvironment(), this.context.getClassLoader());
 		assertThat(listener.shutdownHook).isNull();
 	}
 
 	@Test
-	void shutdownHookCanBeRegistered() throws Exception {
-		TestLoggingApplicationListener listener = new TestLoggingApplicationListener();
-		System.setProperty(LoggingSystem.class.getName(), TestShutdownHandlerLoggingSystem.class.getName());
-		addPropertiesToEnvironment(this.context, "logging.register_shutdown_hook=true");
-		multicastEvent(listener, new ApplicationStartingEvent(new SpringApplication(), NO_ARGS));
-		listener.initialize(this.context.getEnvironment(), this.context.getClassLoader());
-		assertThat(listener.shutdownHook).isNotNull();
-		listener.shutdownHook.start();
-		assertThat(TestShutdownHandlerLoggingSystem.shutdownLatch.await(30, TimeUnit.SECONDS)).isTrue();
-	}
-
-	@Test
 	void closingContextCleansUpLoggingSystem() {
 		System.setProperty(LoggingSystem.SYSTEM_PROPERTY, TestCleanupLoggingSystem.class.getName());
-		multicastEvent(new ApplicationStartingEvent(this.springApplication, new String[0]));
+		multicastEvent(new ApplicationStartingEvent(this.bootstrapContext, this.springApplication, new String[0]));
 		TestCleanupLoggingSystem loggingSystem = (TestCleanupLoggingSystem) ReflectionTestUtils
 				.getField(this.initializer, "loggingSystem");
 		assertThat(loggingSystem.cleanedUp).isFalse();
@@ -429,7 +446,7 @@ class LoggingApplicationListenerTests {
 	@Test
 	void closingChildContextDoesNotCleanUpLoggingSystem() {
 		System.setProperty(LoggingSystem.SYSTEM_PROPERTY, TestCleanupLoggingSystem.class.getName());
-		multicastEvent(new ApplicationStartingEvent(this.springApplication, new String[0]));
+		multicastEvent(new ApplicationStartingEvent(this.bootstrapContext, this.springApplication, new String[0]));
 		TestCleanupLoggingSystem loggingSystem = (TestCleanupLoggingSystem) ReflectionTestUtils
 				.getField(this.initializer, "loggingSystem");
 		assertThat(loggingSystem.cleanedUp).isFalse();
@@ -455,9 +472,14 @@ class LoggingApplicationListenerTests {
 		assertThat(System.getProperty(LoggingSystemProperties.LOG_FILE)).isEqualTo(this.logFile.getAbsolutePath());
 		assertThat(System.getProperty(LoggingSystemProperties.LOG_LEVEL_PATTERN)).isEqualTo("level");
 		assertThat(System.getProperty(LoggingSystemProperties.LOG_PATH)).isEqualTo("path");
+		assertThat(System.getProperty(LoggingSystemProperties.PID_KEY)).isNotNull();
+		assertDeprecated();
+	}
+
+	@SuppressWarnings("deprecation")
+	private void assertDeprecated() {
 		assertThat(System.getProperty(LoggingSystemProperties.ROLLING_FILE_NAME_PATTERN))
 				.isEqualTo("my.log.%d{yyyyMMdd}.%i.gz");
-		assertThat(System.getProperty(LoggingSystemProperties.PID_KEY)).isNotNull();
 	}
 
 	@Test
@@ -488,7 +510,7 @@ class LoggingApplicationListenerTests {
 	@Test
 	void applicationFailedEventCleansUpLoggingSystem() {
 		System.setProperty(LoggingSystem.SYSTEM_PROPERTY, TestCleanupLoggingSystem.class.getName());
-		multicastEvent(new ApplicationStartingEvent(this.springApplication, new String[0]));
+		multicastEvent(new ApplicationStartingEvent(this.bootstrapContext, this.springApplication, new String[0]));
 		TestCleanupLoggingSystem loggingSystem = (TestCleanupLoggingSystem) ReflectionTestUtils
 				.getField(this.initializer, "loggingSystem");
 		assertThat(loggingSystem.cleanedUp).isFalse();
@@ -612,10 +634,10 @@ class LoggingApplicationListenerTests {
 
 	static class TestLoggingApplicationListener extends LoggingApplicationListener {
 
-		private Thread shutdownHook;
+		private Runnable shutdownHook;
 
 		@Override
-		void registerShutdownHook(Thread shutdownHook) {
+		void registerShutdownHook(Runnable shutdownHook) {
 			this.shutdownHook = shutdownHook;
 		}
 

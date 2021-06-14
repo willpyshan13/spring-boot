@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,7 +63,8 @@ public abstract class Launcher {
 	 * @param archives the archives
 	 * @return the classloader
 	 * @throws Exception if the classloader cannot be created
-	 * @deprecated since 2.3.0 in favor of {@link #createClassLoader(Iterator)}
+	 * @deprecated since 2.3.0 for removal in 2.5.0 in favor of
+	 * {@link #createClassLoader(Iterator)}
 	 */
 	@Deprecated
 	protected ClassLoader createClassLoader(List<Archive> archives) throws Exception {
@@ -80,9 +81,7 @@ public abstract class Launcher {
 	protected ClassLoader createClassLoader(Iterator<Archive> archives) throws Exception {
 		List<URL> urls = new ArrayList<>(50);
 		while (archives.hasNext()) {
-			Archive archive = archives.next();
-			urls.add(archive.getUrl());
-			archive.close();
+			urls.add(archives.next().getUrl());
 		}
 		return createClassLoader(urls.toArray(new URL[0]));
 	}
@@ -94,7 +93,7 @@ public abstract class Launcher {
 	 * @throws Exception if the classloader cannot be created
 	 */
 	protected ClassLoader createClassLoader(URL[] urls) throws Exception {
-		return new LaunchedURLClassLoader(isExploded(), urls, getClass().getClassLoader());
+		return new LaunchedURLClassLoader(isExploded(), getArchive(), urls, getClass().getClassLoader());
 	}
 
 	/**
@@ -141,7 +140,7 @@ public abstract class Launcher {
 	 * Returns the archives that will be used to construct the class path.
 	 * @return the class path archives
 	 * @throws Exception if the class path archives cannot be obtained
-	 * @deprecated since 2.3.0 in favor of implementing
+	 * @deprecated since 2.3.0 for removal in 2.5.0 in favor of implementing
 	 * {@link #getClassPathArchivesIterator()}.
 	 */
 	@Deprecated
@@ -169,9 +168,19 @@ public abstract class Launcher {
 	 * {@code true} then only regular JARs are supported and the additional URL and
 	 * ClassLoader support infrastructure can be optimized.
 	 * @return if the jar is exploded.
+	 * @since 2.3.0
 	 */
 	protected boolean isExploded() {
-		return true;
+		return false;
+	}
+
+	/**
+	 * Return the root archive.
+	 * @return the root archive
+	 * @since 2.3.1
+	 */
+	protected Archive getArchive() {
+		return null;
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.SpringBootCondition;
+import org.springframework.boot.context.properties.PropertyMapper;
+import org.springframework.boot.r2dbc.EmbeddedDatabaseConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Condition;
 import org.springframework.context.annotation.ConditionContext;
@@ -43,12 +45,15 @@ import org.springframework.util.StringUtils;
  *
  * @author Mark Paluch
  * @author Stephane Nicoll
+ * @author Rodolpho S. Couto
  */
 abstract class ConnectionFactoryConfigurations {
 
 	protected static ConnectionFactory createConnectionFactory(R2dbcProperties properties, ClassLoader classLoader,
 			List<ConnectionFactoryOptionsBuilderCustomizer> optionsCustomizers) {
-		return ConnectionFactoryBuilder.of(properties, () -> EmbeddedDatabaseConnection.get(classLoader))
+		return org.springframework.boot.r2dbc.ConnectionFactoryBuilder
+				.withOptions(new ConnectionFactoryOptionsInitializer().initialize(properties,
+						() -> EmbeddedDatabaseConnection.get(classLoader)))
 				.configure((options) -> {
 					for (ConnectionFactoryOptionsBuilderCustomizer optionsCustomizer : optionsCustomizers) {
 						optionsCustomizer.customize(options);
@@ -68,11 +73,16 @@ abstract class ConnectionFactoryConfigurations {
 			ConnectionFactory connectionFactory = createConnectionFactory(properties, resourceLoader.getClassLoader(),
 					customizers.orderedStream().collect(Collectors.toList()));
 			R2dbcProperties.Pool pool = properties.getPool();
-			ConnectionPoolConfiguration.Builder builder = ConnectionPoolConfiguration.builder(connectionFactory)
-					.maxSize(pool.getMaxSize()).initialSize(pool.getInitialSize()).maxIdleTime(pool.getMaxIdleTime());
-			if (StringUtils.hasText(pool.getValidationQuery())) {
-				builder.validationQuery(pool.getValidationQuery());
-			}
+			PropertyMapper map = PropertyMapper.get().alwaysApplyingWhenNonNull();
+			ConnectionPoolConfiguration.Builder builder = ConnectionPoolConfiguration.builder(connectionFactory);
+			map.from(pool.getMaxIdleTime()).to(builder::maxIdleTime);
+			map.from(pool.getMaxLifeTime()).to(builder::maxLifeTime);
+			map.from(pool.getMaxAcquireTime()).to(builder::maxAcquireTime);
+			map.from(pool.getMaxCreateConnectionTime()).to(builder::maxCreateConnectionTime);
+			map.from(pool.getInitialSize()).to(builder::initialSize);
+			map.from(pool.getMaxSize()).to(builder::maxSize);
+			map.from(pool.getValidationQuery()).whenHasText().to(builder::validationQuery);
+			map.from(pool.getValidationDepth()).to(builder::validationDepth);
 			return new ConnectionPool(builder.build());
 		}
 

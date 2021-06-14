@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,13 +35,17 @@ import org.mockito.ArgumentMatchers;
 import org.springframework.boot.actuate.autoconfigure.metrics.test.MetricsRun;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.autoconfigure.orm.jpa.EntityManagerFactoryBuilderCustomizer;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
+import org.springframework.boot.autoconfigure.sql.init.SqlInitializationAutoConfiguration;
 import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
@@ -58,7 +62,7 @@ import static org.mockito.Mockito.mock;
  */
 class HibernateMetricsAutoConfigurationTests {
 
-	private ApplicationContextRunner contextRunner = new ApplicationContextRunner().with(MetricsRun.simple())
+	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner().with(MetricsRun.simple())
 			.withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class,
 					HibernateJpaAutoConfiguration.class, HibernateMetricsAutoConfiguration.class))
 			.withUserConfiguration(BaseConfiguration.class);
@@ -124,6 +128,21 @@ class HibernateMetricsAutoConfigurationTests {
 					assertThat(context).doesNotHaveBean(HibernateMetricsAutoConfiguration.class);
 					MeterRegistry registry = context.getBean(MeterRegistry.class);
 					assertThat(registry.find("hibernate.statements").meter()).isNull();
+				});
+	}
+
+	@Test
+	void entityManagerFactoryInstrumentationDoesNotDeadlockWithDeferredInitialization() {
+		this.contextRunner.withPropertyValues("spring.jpa.properties.hibernate.generate_statistics:true",
+				"spring.sql.init.schema-locations:city-schema.sql", "spring.sql.init.data-locations=city-data.sql")
+				.withConfiguration(AutoConfigurations.of(SqlInitializationAutoConfiguration.class))
+				.withBean(EntityManagerFactoryBuilderCustomizer.class,
+						() -> (builder) -> builder.setBootstrapExecutor(new SimpleAsyncTaskExecutor()))
+				.run((context) -> {
+					JdbcTemplate jdbcTemplate = new JdbcTemplate(context.getBean(DataSource.class));
+					assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) from CITY", Integer.class)).isEqualTo(1);
+					MeterRegistry registry = context.getBean(MeterRegistry.class);
+					registry.get("hibernate.statements").tags("entityManagerFactory", "entityManagerFactory").meter();
 				});
 	}
 

@@ -24,6 +24,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
 import org.springframework.boot.availability.ReadinessState;
@@ -97,9 +98,9 @@ class ReactiveWebServerApplicationContextTests {
 		this.context.addApplicationListener(listener);
 		this.context.refresh();
 		List<ApplicationEvent> events = listener.receivedEvents();
-		assertThat(events).hasSize(2).extracting("class").containsExactly(ContextRefreshedEvent.class,
-				ReactiveWebServerInitializedEvent.class);
-		ReactiveWebServerInitializedEvent initializedEvent = (ReactiveWebServerInitializedEvent) events.get(1);
+		assertThat(events).hasSize(2).extracting("class").containsExactly(ReactiveWebServerInitializedEvent.class,
+				ContextRefreshedEvent.class);
+		ReactiveWebServerInitializedEvent initializedEvent = (ReactiveWebServerInitializedEvent) events.get(0);
 		assertThat(initializedEvent.getSource().getPort()).isGreaterThanOrEqualTo(0);
 		assertThat(initializedEvent.getApplicationContext()).isEqualTo(this.context);
 	}
@@ -139,6 +140,18 @@ class ReactiveWebServerApplicationContextTests {
 				ContextClosedEvent.class);
 		assertThat(((AvailabilityChangeEvent<ReadinessState>) events.get(0)).getState())
 				.isEqualTo(ReadinessState.REFUSING_TRAFFIC);
+	}
+
+	@Test
+	void whenContextIsNotActiveThenCloseDoesNotChangeTheApplicationAvailability() {
+		addWebServerFactoryBean();
+		addHttpHandlerBean();
+		TestApplicationListener listener = new TestApplicationListener();
+		this.context.addApplicationListener(listener);
+		this.context.registerBeanDefinition("refreshFailure", new RootBeanDefinition(RefreshFailure.class));
+		assertThatExceptionOfType(BeanCreationException.class).isThrownBy(this.context::refresh);
+		this.context.close();
+		assertThat(listener.receivedEvents()).isEmpty();
 	}
 
 	@Test
@@ -182,6 +195,14 @@ class ReactiveWebServerApplicationContextTests {
 				receivedEvents.add(this.events.pollFirst());
 			}
 			return receivedEvents;
+		}
+
+	}
+
+	static class RefreshFailure {
+
+		RefreshFailure() {
+			throw new RuntimeException("Fail refresh");
 		}
 
 	}

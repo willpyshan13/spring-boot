@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ import org.apache.coyote.ProtocolHandler;
 import org.apache.coyote.http11.AbstractHttp11Protocol;
 
 import org.springframework.boot.autoconfigure.web.ErrorProperties;
-import org.springframework.boot.autoconfigure.web.ErrorProperties.IncludeStacktrace;
+import org.springframework.boot.autoconfigure.web.ErrorProperties.IncludeAttribute;
 import org.springframework.boot.autoconfigure.web.ServerProperties;
 import org.springframework.boot.autoconfigure.web.ServerProperties.Tomcat.Accesslog;
 import org.springframework.boot.autoconfigure.web.ServerProperties.Tomcat.Remoteip;
@@ -56,6 +56,7 @@ import org.springframework.util.unit.DataSize;
  * @author Dirk Deyne
  * @author Rafiullah Hamedy
  * @author Victor Mandujano
+ * @author Parviz Rozikov
  * @since 2.0.0
  */
 public class TomcatWebServerFactoryCustomizer
@@ -108,10 +109,16 @@ public class TomcatWebServerFactoryCustomizer
 				.to((acceptCount) -> customizeAcceptCount(factory, acceptCount));
 		propertyMapper.from(tomcatProperties::getProcessorCache)
 				.to((processorCache) -> customizeProcessorCache(factory, processorCache));
+		propertyMapper.from(tomcatProperties::getKeepAliveTimeout).whenNonNull()
+				.to((keepAliveTimeout) -> customizeKeepAliveTimeout(factory, keepAliveTimeout));
+		propertyMapper.from(tomcatProperties::getMaxKeepAliveRequests)
+				.to((maxKeepAliveRequests) -> customizeMaxKeepAliveRequests(factory, maxKeepAliveRequests));
 		propertyMapper.from(tomcatProperties::getRelaxedPathChars).as(this::joinCharacters).whenHasText()
 				.to((relaxedChars) -> customizeRelaxedPathChars(factory, relaxedChars));
 		propertyMapper.from(tomcatProperties::getRelaxedQueryChars).as(this::joinCharacters).whenHasText()
 				.to((relaxedChars) -> customizeRelaxedQueryChars(factory, relaxedChars));
+		propertyMapper.from(tomcatProperties::isRejectIllegalHeader)
+				.to((rejectIllegalHeader) -> customizeRejectIllegalHeader(factory, rejectIllegalHeader));
 		customizeStaticResources(factory);
 		customizeErrorReportValve(properties.getError(), factory);
 	}
@@ -139,6 +146,26 @@ public class TomcatWebServerFactoryCustomizer
 		});
 	}
 
+	private void customizeKeepAliveTimeout(ConfigurableTomcatWebServerFactory factory, Duration keepAliveTimeout) {
+		factory.addConnectorCustomizers((connector) -> {
+			ProtocolHandler handler = connector.getProtocolHandler();
+			if (handler instanceof AbstractProtocol) {
+				AbstractProtocol<?> protocol = (AbstractProtocol<?>) handler;
+				protocol.setKeepAliveTimeout((int) keepAliveTimeout.toMillis());
+			}
+		});
+	}
+
+	private void customizeMaxKeepAliveRequests(ConfigurableTomcatWebServerFactory factory, int maxKeepAliveRequests) {
+		factory.addConnectorCustomizers((connector) -> {
+			ProtocolHandler handler = connector.getProtocolHandler();
+			if (handler instanceof AbstractHttp11Protocol) {
+				AbstractHttp11Protocol<?> protocol = (AbstractHttp11Protocol<?>) handler;
+				protocol.setMaxKeepAliveRequests(maxKeepAliveRequests);
+			}
+		});
+	}
+
 	private void customizeMaxConnections(ConfigurableTomcatWebServerFactory factory, int maxConnections) {
 		factory.addConnectorCustomizers((connector) -> {
 			ProtocolHandler handler = connector.getProtocolHandler();
@@ -160,11 +187,21 @@ public class TomcatWebServerFactoryCustomizer
 	}
 
 	private void customizeRelaxedPathChars(ConfigurableTomcatWebServerFactory factory, String relaxedChars) {
-		factory.addConnectorCustomizers((connector) -> connector.setAttribute("relaxedPathChars", relaxedChars));
+		factory.addConnectorCustomizers((connector) -> connector.setProperty("relaxedPathChars", relaxedChars));
 	}
 
 	private void customizeRelaxedQueryChars(ConfigurableTomcatWebServerFactory factory, String relaxedChars) {
-		factory.addConnectorCustomizers((connector) -> connector.setAttribute("relaxedQueryChars", relaxedChars));
+		factory.addConnectorCustomizers((connector) -> connector.setProperty("relaxedQueryChars", relaxedChars));
+	}
+
+	private void customizeRejectIllegalHeader(ConfigurableTomcatWebServerFactory factory, boolean rejectIllegalHeader) {
+		factory.addConnectorCustomizers((connector) -> {
+			ProtocolHandler handler = connector.getProtocolHandler();
+			if (handler instanceof AbstractHttp11Protocol) {
+				AbstractHttp11Protocol<?> protocol = (AbstractHttp11Protocol<?>) handler;
+				protocol.setRejectIllegalHeader(rejectIllegalHeader);
+			}
+		});
 	}
 
 	private String joinCharacters(List<Character> content) {
@@ -183,8 +220,7 @@ public class TomcatWebServerFactoryCustomizer
 			if (StringUtils.hasLength(remoteIpHeader)) {
 				valve.setRemoteIpHeader(remoteIpHeader);
 			}
-			// The internal proxies default to a white list of "safe" internal IP
-			// addresses
+			// The internal proxies default to a list of "safe" internal IP addresses
 			valve.setInternalProxies(remoteIpProperties.getInternalProxies());
 			try {
 				valve.setHostHeader(remoteIpProperties.getHostHeader());
@@ -293,7 +329,7 @@ public class TomcatWebServerFactoryCustomizer
 	}
 
 	private void customizeErrorReportValve(ErrorProperties error, ConfigurableTomcatWebServerFactory factory) {
-		if (error.getIncludeStacktrace() == IncludeStacktrace.NEVER) {
+		if (error.getIncludeStacktrace() == IncludeAttribute.NEVER) {
 			factory.addContextCustomizers((context) -> {
 				ErrorReportValve valve = new ErrorReportValve();
 				valve.setShowServerInfo(false);

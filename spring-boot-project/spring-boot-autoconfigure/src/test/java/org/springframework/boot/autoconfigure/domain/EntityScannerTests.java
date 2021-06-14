@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@
 
 package org.springframework.boot.autoconfigure.domain;
 
+import java.util.Collections;
 import java.util.Set;
 
 import javax.persistence.Embeddable;
 import javax.persistence.Entity;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import org.springframework.boot.autoconfigure.domain.scan.a.EmbeddableA;
 import org.springframework.boot.autoconfigure.domain.scan.a.EntityA;
@@ -29,11 +31,19 @@ import org.springframework.boot.autoconfigure.domain.scan.b.EmbeddableB;
 import org.springframework.boot.autoconfigure.domain.scan.b.EntityB;
 import org.springframework.boot.autoconfigure.domain.scan.c.EmbeddableC;
 import org.springframework.boot.autoconfigure.domain.scan.c.EntityC;
+import org.springframework.boot.test.util.TestPropertyValues;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.type.filter.AnnotationTypeFilter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 /**
  * Tests for {@link EntityScanner}.
@@ -51,6 +61,19 @@ class EntityScannerTests {
 	@Test
 	void scanShouldScanFromSinglePackage() throws Exception {
 		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ScanConfig.class);
+		EntityScanner scanner = new EntityScanner(context);
+		Set<Class<?>> scanned = scanner.scan(Entity.class);
+		assertThat(scanned).containsOnly(EntityA.class, EntityB.class, EntityC.class);
+		context.close();
+	}
+
+	@Test
+	void scanShouldScanFromResolvedPlaceholderPackage() throws Exception {
+		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+		TestPropertyValues.of("com.example.entity-package=org.springframework.boot.autoconfigure.domain.scan")
+				.applyTo(context);
+		context.register(ScanPlaceholderConfig.class);
+		context.refresh();
 		EntityScanner scanner = new EntityScanner(context);
 		Set<Class<?>> scanned = scanner.scan(Entity.class);
 		assertThat(scanned).containsOnly(EntityA.class, EntityB.class, EntityC.class);
@@ -79,6 +102,41 @@ class EntityScannerTests {
 		context.close();
 	}
 
+	@Test
+	void scanShouldUseCustomCandidateComponentProvider() throws ClassNotFoundException {
+		ClassPathScanningCandidateComponentProvider candidateComponentProvider = mock(
+				ClassPathScanningCandidateComponentProvider.class);
+		given(candidateComponentProvider.findCandidateComponents("org.springframework.boot.autoconfigure.domain.scan"))
+				.willReturn(Collections.emptySet());
+		AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ScanConfig.class);
+		TestEntityScanner scanner = new TestEntityScanner(context, candidateComponentProvider);
+		scanner.scan(Entity.class);
+		ArgumentCaptor<AnnotationTypeFilter> annotationTypeFilter = ArgumentCaptor.forClass(AnnotationTypeFilter.class);
+		verify(candidateComponentProvider).addIncludeFilter(annotationTypeFilter.capture());
+		verify(candidateComponentProvider)
+				.findCandidateComponents("org.springframework.boot.autoconfigure.domain.scan");
+		verifyNoMoreInteractions(candidateComponentProvider);
+		assertThat(annotationTypeFilter.getValue().getAnnotationType()).isEqualTo(Entity.class);
+	}
+
+	private static class TestEntityScanner extends EntityScanner {
+
+		private final ClassPathScanningCandidateComponentProvider candidateComponentProvider;
+
+		TestEntityScanner(ApplicationContext context,
+				ClassPathScanningCandidateComponentProvider candidateComponentProvider) {
+			super(context);
+			this.candidateComponentProvider = candidateComponentProvider;
+		}
+
+		@Override
+		protected ClassPathScanningCandidateComponentProvider createClassPathScanningCandidateComponentProvider(
+				ApplicationContext context) {
+			return this.candidateComponentProvider;
+		}
+
+	}
+
 	@Configuration(proxyBeanMethods = false)
 	@EntityScan("org.springframework.boot.autoconfigure.domain.scan")
 	static class ScanConfig {
@@ -94,6 +152,12 @@ class EntityScannerTests {
 	@Configuration(proxyBeanMethods = false)
 	@EntityScan(basePackageClasses = EntityB.class)
 	static class ScanBConfig {
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	@EntityScan("${com.example.entity-package}")
+	static class ScanPlaceholderConfig {
 
 	}
 

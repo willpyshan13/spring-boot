@@ -3,7 +3,6 @@ plugins {
 	id "org.springframework.boot.deployed"
 	id "org.springframework.boot.conventions"
 	id "org.springframework.boot.integration-test"
-	id "org.springframework.boot.internal-dependency-management"
 }
 
 description = "Spring Boot CLI"
@@ -22,7 +21,6 @@ dependencies {
 
 	dependenciesBom(project(path: ":spring-boot-project:spring-boot-dependencies", configuration: "effectiveBom"))
 
-	implementation(platform(project(":spring-boot-project:spring-boot-parent")))
 	implementation(project(":spring-boot-project:spring-boot-tools:spring-boot-loader-tools"))
 	implementation("com.vaadin.external.google:android-json")
 	implementation("jline:jline")
@@ -50,7 +48,6 @@ dependencies {
 	implementation("org.springframework:spring-core")
 	implementation("org.springframework.security:spring-security-crypto")
 
-	intTestImplementation(platform(project(":spring-boot-project:spring-boot-dependencies")))
 	intTestImplementation(project(":spring-boot-project:spring-boot-tools:spring-boot-loader-tools"))
 	intTestImplementation(project(":spring-boot-project:spring-boot-tools:spring-boot-test-support"))
 	intTestImplementation("org.assertj:assertj-core")
@@ -66,6 +63,7 @@ dependencies {
 	testImplementation("org.codehaus.groovy:groovy-templates")
 	testImplementation("org.junit.jupiter:junit-jupiter")
 	testImplementation("org.mockito:mockito-core")
+	testImplementation("org.mockito:mockito-junit-jupiter")
 	testImplementation("org.springframework:spring-test")
 
 	testRepository(project(path: ":spring-boot-project:spring-boot-starters:spring-boot-starter-actuator", configuration: "mavenRepository"))
@@ -101,6 +99,7 @@ test {
 }
 
 task fullJar(type: Jar) {
+	dependsOn configurations.loader
 	classifier = "full"
 	entryCompression = "stored"
 	from(configurations.runtimeClasspath) {
@@ -109,8 +108,11 @@ task fullJar(type: Jar) {
 	from(sourceSets.main.output) {
 		into "BOOT-INF/classes"
 	}
-	into("") {
-		from zipTree(configurations.loader.singleFile)
+	from {
+		zipTree(configurations.loader.singleFile).matching {
+			exclude "META-INF/LICENSE.txt"
+			exclude "META-INF/NOTICE.txt"
+		}
 	}
 	manifest {
 		attributes(
@@ -131,10 +133,11 @@ def configureArchive(archive) {
 		into "lib/"
 	}
 	archive.from(file("src/main/content")) {
-		eachFile { it.mode = it.directory ? 0x755 : 0x644 }
+		dirMode = 0755
+		fileMode = 0644
 	}
 	archive.from(file("src/main/executablecontent")) {
-		eachFile { it.mode = 0x755 }
+		fileMode = 0755
 	}
 }
 
@@ -169,11 +172,11 @@ def scoopManifestArtifact = artifacts.add("archives", file("${buildDir}/scoop/sp
 task homebrewFormula(type: org.springframework.boot.build.cli.HomebrewFormula) {
 	dependsOn tar
 	outputDir = file("${buildDir}/homebrew")
-	template = file("src/main/homebrew/springboot.rb")
+	template = file("src/main/homebrew/spring-boot.rb")
 	archive = tar.archiveFile
 }
 
-def homebrewFormulaArtifact = artifacts.add("archives", file("${buildDir}/homebrew/springboot.rb")) {
+def homebrewFormulaArtifact = artifacts.add("archives", file("${buildDir}/homebrew/spring-boot.rb")) {
 	type "rb"
 	classifier "homebrew"
 	builtBy "homebrewFormula"

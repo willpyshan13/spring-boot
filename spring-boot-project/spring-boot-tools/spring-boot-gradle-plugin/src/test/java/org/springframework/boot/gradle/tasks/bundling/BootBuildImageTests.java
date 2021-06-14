@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,11 @@
 package org.springframework.boot.gradle.tasks.bundling;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.gradle.api.GradleException;
 import org.gradle.api.JavaVersion;
 import org.gradle.api.Project;
 import org.gradle.testfixtures.ProjectBuilder;
@@ -27,14 +29,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import org.springframework.boot.buildpack.platform.build.BuildRequest;
+import org.springframework.boot.buildpack.platform.build.BuildpackReference;
+import org.springframework.boot.buildpack.platform.build.PullPolicy;
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
  * Tests for {@link BootBuildImage}.
  *
  * @author Andy Wilkinson
  * @author Scott Frederick
+ * @author Andrey Shlykov
  */
 class BootBuildImageTests {
 
@@ -131,15 +138,15 @@ class BootBuildImageTests {
 
 	@Test
 	void whenJavaVersionIsSetInEnvironmentItIsIncludedInTheRequest() {
-		this.buildImage.environment("BP_JAVA_VERSION", "from-env");
+		this.buildImage.environment("BP_JVM_VERSION", "from-env");
 		this.buildImage.getTargetJavaVersion().set(JavaVersion.VERSION_1_8);
-		assertThat(this.buildImage.createRequest().getEnv()).containsEntry("BP_JAVA_VERSION", "from-env").hasSize(1);
+		assertThat(this.buildImage.createRequest().getEnv()).containsEntry("BP_JVM_VERSION", "from-env").hasSize(1);
 	}
 
 	@Test
 	void whenTargetCompatibilityIsSetThenJavaVersionIsIncludedInTheRequest() {
 		this.buildImage.getTargetJavaVersion().set(JavaVersion.VERSION_1_8);
-		assertThat(this.buildImage.createRequest().getEnv()).containsEntry("BP_JAVA_VERSION", "8.*").hasSize(1);
+		assertThat(this.buildImage.createRequest().getEnv()).containsEntry("BP_JVM_VERSION", "8.*").hasSize(1);
 	}
 
 	@Test
@@ -147,7 +154,7 @@ class BootBuildImageTests {
 		this.buildImage.environment("ALPHA", "a");
 		this.buildImage.getTargetJavaVersion().set(JavaVersion.VERSION_11);
 		assertThat(this.buildImage.createRequest().getEnv()).containsEntry("ALPHA", "a")
-				.containsEntry("BP_JAVA_VERSION", "11.*").hasSize(2);
+				.containsEntry("BP_JVM_VERSION", "11.*").hasSize(2);
 	}
 
 	@Test
@@ -173,14 +180,102 @@ class BootBuildImageTests {
 	}
 
 	@Test
+	void whenUsingDefaultConfigurationThenRequestHasPublishDisabled() {
+		assertThat(this.buildImage.createRequest().isPublish()).isFalse();
+	}
+
+	@Test
+	void whenPublishIsEnabledWithoutPublishRegistryThenExceptionIsThrown() {
+		this.buildImage.setPublish(true);
+		assertThatExceptionOfType(GradleException.class).isThrownBy(this.buildImage::createRequest)
+				.withMessageContaining("Publishing an image requires docker.publishRegistry to be configured");
+	}
+
+	@Test
 	void whenNoBuilderIsConfiguredThenRequestHasDefaultBuilder() {
-		assertThat(this.buildImage.createRequest().getBuilder().getName()).isEqualTo("paketo-buildpacks/builder");
+		assertThat(this.buildImage.createRequest().getBuilder().getName()).isEqualTo("paketobuildpacks/builder");
 	}
 
 	@Test
 	void whenBuilderIsConfiguredThenRequestUsesSpecifiedBuilder() {
 		this.buildImage.setBuilder("example.com/test/builder:1.2");
 		assertThat(this.buildImage.createRequest().getBuilder().getName()).isEqualTo("test/builder");
+	}
+
+	@Test
+	void whenNoRunImageIsConfiguredThenRequestUsesDefaultRunImage() {
+		assertThat(this.buildImage.createRequest().getRunImage()).isNull();
+	}
+
+	@Test
+	void whenRunImageIsConfiguredThenRequestUsesSpecifiedRunImage() {
+		this.buildImage.setRunImage("example.com/test/run:1.0");
+		assertThat(this.buildImage.createRequest().getRunImage().getName()).isEqualTo("test/run");
+	}
+
+	@Test
+	void whenUsingDefaultConfigurationThenRequestHasAlwaysPullPolicy() {
+		assertThat(this.buildImage.createRequest().getPullPolicy()).isEqualTo(PullPolicy.ALWAYS);
+	}
+
+	@Test
+	void whenPullPolicyIsConfiguredThenRequestHasPullPolicy() {
+		this.buildImage.setPullPolicy(PullPolicy.NEVER);
+		assertThat(this.buildImage.createRequest().getPullPolicy()).isEqualTo(PullPolicy.NEVER);
+	}
+
+	@Test
+	void whenNoBuildpacksAreConfiguredThenRequestUsesDefaultBuildpacks() {
+		assertThat(this.buildImage.createRequest().getBuildpacks()).isEmpty();
+	}
+
+	@Test
+	void whenBuildpacksAreConfiguredThenRequestHasBuildpacks() {
+		this.buildImage.setBuildpacks(Arrays.asList("example/buildpack1", "example/buildpack2"));
+		assertThat(this.buildImage.createRequest().getBuildpacks()).containsExactly(
+				BuildpackReference.of("example/buildpack1"), BuildpackReference.of("example/buildpack2"));
+	}
+
+	@Test
+	void whenEntriesAreAddedToBuildpacksThenRequestHasBuildpacks() {
+		this.buildImage.buildpacks(Arrays.asList("example/buildpack1", "example/buildpack2"));
+		assertThat(this.buildImage.createRequest().getBuildpacks()).containsExactly(
+				BuildpackReference.of("example/buildpack1"), BuildpackReference.of("example/buildpack2"));
+	}
+
+	@Test
+	void whenIndividualEntriesAreAddedToBuildpacksThenRequestHasBuildpacks() {
+		this.buildImage.buildpack("example/buildpack1");
+		this.buildImage.buildpack("example/buildpack2");
+		assertThat(this.buildImage.createRequest().getBuildpacks()).containsExactly(
+				BuildpackReference.of("example/buildpack1"), BuildpackReference.of("example/buildpack2"));
+	}
+
+	@Test
+	void whenNoBindingsAreConfiguredThenRequestHasNoBindings() {
+		assertThat(this.buildImage.createRequest().getBindings()).isEmpty();
+	}
+
+	@Test
+	void whenBindingsAreConfiguredThenRequestHasBindings() {
+		this.buildImage.setBindings(Arrays.asList("host-src:container-dest:ro", "volume-name:container-dest:rw"));
+		assertThat(this.buildImage.createRequest().getBindings())
+				.containsExactly(Binding.of("host-src:container-dest:ro"), Binding.of("volume-name:container-dest:rw"));
+	}
+
+	@Test
+	void whenEntriesAreAddedToBindingsThenRequestHasBindings() {
+		this.buildImage.bindings(Arrays.asList("host-src:container-dest:ro", "volume-name:container-dest:rw"));
+		assertThat(this.buildImage.createRequest().getBindings())
+				.containsExactly(Binding.of("host-src:container-dest:ro"), Binding.of("volume-name:container-dest:rw"));
+	}
+
+	@Test
+	void whenIndividualEntriesAreAddedToBindingsThenRequestHasBindings() {
+		this.buildImage.binding("host-src:container-dest:ro");
+		this.buildImage.binding("volume-name:container-dest:rw");
+		assertThat(this.buildImage.createRequest().getBindings())
+				.containsExactly(Binding.of("host-src:container-dest:ro"), Binding.of("volume-name:container-dest:rw"));
 	}
 
 }

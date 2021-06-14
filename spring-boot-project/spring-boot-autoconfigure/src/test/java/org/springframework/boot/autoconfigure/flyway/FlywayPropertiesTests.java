@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests for {@link FlywayProperties}.
  *
  * @author Stephane Nicoll
+ * @author Chris Bono
  */
 class FlywayPropertiesTests {
 
@@ -51,8 +52,12 @@ class FlywayPropertiesTests {
 				.isEqualTo(configuration.getLocations());
 		assertThat(properties.getEncoding()).isEqualTo(configuration.getEncoding());
 		assertThat(properties.getConnectRetries()).isEqualTo(configuration.getConnectRetries());
+		// Can't assert lock retry count default as it is new in Flyway 7.1
+		// Asserting hard-coded value in the metadata instead
+		assertThat(configuration.getLockRetryCount()).isEqualTo(50);
 		assertThat(properties.getDefaultSchema()).isEqualTo(configuration.getDefaultSchema());
 		assertThat(properties.getSchemas()).isEqualTo(Arrays.asList(configuration.getSchemas()));
+		assertThat(properties.isCreateSchemas()).isEqualTo(configuration.getCreateSchemas());
 		assertThat(properties.getTable()).isEqualTo(configuration.getTable());
 		assertThat(properties.getBaselineDescription()).isEqualTo(configuration.getBaselineDescription());
 		assertThat(MigrationVersion.fromVersion(properties.getBaselineVersion()))
@@ -95,10 +100,11 @@ class FlywayPropertiesTests {
 		Map<String, PropertyDescriptor> configuration = indexProperties(
 				PropertyAccessorFactory.forBeanPropertyAccess(new ClassicConfiguration()));
 		// Properties specific settings
-		ignoreProperties(properties, "url", "user", "password", "enabled", "checkLocation", "createDataSource");
-
+		ignoreProperties(properties, "url", "driverClassName", "user", "password", "enabled", "checkLocation",
+				"createDataSource");
 		// High level object we can't set with properties
-		ignoreProperties(configuration, "callbacks", "classLoader", "dataSource", "javaMigrations", "resolvers");
+		ignoreProperties(configuration, "callbacks", "classLoader", "dataSource", "javaMigrations",
+				"javaMigrationClassProvider", "resourceProvider", "resolvers");
 		// Properties we don't want to expose
 		ignoreProperties(configuration, "resolversAsClassNames", "callbacksAsClassNames");
 		// Handled by the conversion service
@@ -109,11 +115,15 @@ class FlywayPropertiesTests {
 		ignoreProperties(properties, "initSqls");
 		// Handled as dryRunOutput
 		ignoreProperties(configuration, "dryRunOutputAsFile", "dryRunOutputAsFileName");
+		// Handled as createSchemas
+		ignoreProperties(configuration, "shouldCreateSchemas");
+		// Getters for the DataSource settings rather than actual properties
+		ignoreProperties(configuration, "password", "url", "user");
 		List<String> configurationKeys = new ArrayList<>(configuration.keySet());
 		Collections.sort(configurationKeys);
 		List<String> propertiesKeys = new ArrayList<>(properties.keySet());
 		Collections.sort(propertiesKeys);
-		assertThat(configurationKeys).isEqualTo(propertiesKeys);
+		assertThat(configurationKeys).containsExactlyElementsOf(propertiesKeys);
 	}
 
 	private void ignoreProperties(Map<String, ?> index, String... propertyNames) {

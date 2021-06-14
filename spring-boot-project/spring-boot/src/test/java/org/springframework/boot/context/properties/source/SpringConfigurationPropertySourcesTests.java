@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import java.util.Iterator;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.boot.env.RandomValuePropertySource;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
@@ -159,6 +160,16 @@ class SpringConfigurationPropertySourcesTests {
 		sources.remove("test");
 		sources.addLast(source2);
 		assertThat(configurationSources.iterator().next().getConfigurationProperty(name).getValue()).isEqualTo("s2");
+	}
+
+	@Test // gh-21659
+	void shouldAdaptRandomePropertySource() {
+		MutablePropertySources sources = new MutablePropertySources();
+		sources.addFirst(new RandomValuePropertySource());
+		Iterator<ConfigurationPropertySource> iterator = new SpringConfigurationPropertySources(sources).iterator();
+		ConfigurationPropertyName name = ConfigurationPropertyName.of("random.int");
+		assertThat(iterator.next().getConfigurationProperty(name).getValue()).isNotNull();
+		assertThat(iterator.hasNext()).isFalse();
 	}
 
 }

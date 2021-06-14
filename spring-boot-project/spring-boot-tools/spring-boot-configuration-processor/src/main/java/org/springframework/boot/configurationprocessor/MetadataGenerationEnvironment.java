@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.annotation.processing.Messager;
 import javax.annotation.processing.ProcessingEnvironment;
@@ -91,14 +93,16 @@ class MetadataGenerationEnvironment {
 
 	private final String defaultValueAnnotation;
 
-	private final String endpointAnnotation;
+	private final Set<String> endpointAnnotations;
 
 	private final String readOperationAnnotation;
 
+	private final String nameAnnotation;
+
 	MetadataGenerationEnvironment(ProcessingEnvironment environment, String configurationPropertiesAnnotation,
 			String nestedConfigurationPropertyAnnotation, String deprecatedConfigurationPropertyAnnotation,
-			String constructorBindingAnnotation, String defaultValueAnnotation, String endpointAnnotation,
-			String readOperationAnnotation) {
+			String constructorBindingAnnotation, String defaultValueAnnotation, Set<String> endpointAnnotations,
+			String readOperationAnnotation, String nameAnnotation) {
 		this.typeUtils = new TypeUtils(environment);
 		this.elements = environment.getElementUtils();
 		this.messager = environment.getMessager();
@@ -108,8 +112,9 @@ class MetadataGenerationEnvironment {
 		this.deprecatedConfigurationPropertyAnnotation = deprecatedConfigurationPropertyAnnotation;
 		this.constructorBindingAnnotation = constructorBindingAnnotation;
 		this.defaultValueAnnotation = defaultValueAnnotation;
-		this.endpointAnnotation = endpointAnnotation;
+		this.endpointAnnotations = endpointAnnotations;
 		this.readOperationAnnotation = readOperationAnnotation;
+		this.nameAnnotation = nameAnnotation;
 	}
 
 	private static FieldValuesParser resolveFieldValuesParser(ProcessingEnvironment env) {
@@ -170,8 +175,8 @@ class MetadataGenerationEnvironment {
 			reason = (String) elementValues.get("reason");
 			replacement = (String) elementValues.get("replacement");
 		}
-		reason = "".equals(reason) ? null : reason;
-		replacement = "".equals(replacement) ? null : replacement;
+		reason = (reason == null || reason.isEmpty()) ? null : reason;
+		replacement = (replacement == null || replacement.isEmpty()) ? null : replacement;
 		return new ItemDeprecation(reason, replacement);
 	}
 
@@ -267,12 +272,17 @@ class MetadataGenerationEnvironment {
 		return getAnnotation(element, this.defaultValueAnnotation);
 	}
 
-	TypeElement getEndpointAnnotationElement() {
-		return this.elements.getTypeElement(this.endpointAnnotation);
+	Set<TypeElement> getEndpointAnnotationElements() {
+		return this.endpointAnnotations.stream().map(this.elements::getTypeElement).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
 	}
 
 	AnnotationMirror getReadOperationAnnotation(Element element) {
 		return getAnnotation(element, this.readOperationAnnotation);
+	}
+
+	AnnotationMirror getNameAnnotation(Element element) {
+		return getAnnotation(element, this.nameAnnotation);
 	}
 
 	boolean hasNullableAnnotation(Element element) {

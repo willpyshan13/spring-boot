@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,11 @@
 
 package org.springframework.boot.autoconfigure.security.servlet;
 
-import java.util.EnumSet;
+import java.security.interfaces.RSAPublicKey;
 
 import javax.servlet.DispatcherType;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -28,23 +29,30 @@ import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoCon
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.test.City;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.ConfigurationPropertiesBinding;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.convert.ApplicationConversionService;
+import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.boot.web.servlet.DelegatingFilterProxyRegistrationBean;
 import org.springframework.boot.web.servlet.filter.OrderedFilter;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.convert.converter.Converter;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.security.authentication.AuthenticationEventPublisher;
 import org.springframework.security.authentication.DefaultAuthenticationEventPublisher;
 import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.data.repository.query.SecurityEvaluationContextExtension;
 import org.springframework.security.web.FilterChainProxy;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.security.web.SecurityFilterChain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -58,7 +66,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SecurityAutoConfigurationTests {
 
-	private WebApplicationContextRunner contextRunner = new WebApplicationContextRunner().withConfiguration(
+	private final WebApplicationContextRunner contextRunner = new WebApplicationContextRunner().withConfiguration(
 			AutoConfigurations.of(SecurityAutoConfiguration.class, PropertyPlaceholderAutoConfiguration.class));
 
 	@Test
@@ -66,6 +74,34 @@ class SecurityAutoConfigurationTests {
 		this.contextRunner.run((context) -> {
 			assertThat(context.getBean(AuthenticationManagerBuilder.class)).isNotNull();
 			assertThat(context.getBean(FilterChainProxy.class).getFilterChains()).hasSize(1);
+		});
+	}
+
+	@Test
+	void enableWebSecurityIsConditionalOnClass() {
+		this.contextRunner.withClassLoader(new FilteredClassLoader("org.springframework.security.config"))
+				.run((context) -> assertThat(context).doesNotHaveBean("springSecurityFilterChain"));
+	}
+
+	@Test
+	void filterChainBeanIsConditionalOnClassSecurityFilterChain() {
+		this.contextRunner.withClassLoader(new FilteredClassLoader(SecurityFilterChain.class))
+				.run((context) -> assertThat(context).doesNotHaveBean(SecurityFilterChain.class));
+	}
+
+	@Test
+	void securityConfigurerBacksOffWhenOtherSecurityFilterChainBeanPresent() {
+		this.contextRunner.withUserConfiguration(TestSecurityFilterChainConfig.class).run((context) -> {
+			assertThat(context.getBeansOfType(SecurityFilterChain.class).size()).isEqualTo(1);
+			assertThat(context.containsBean("testSecurityFilterChain")).isTrue();
+		});
+	}
+
+	@Test
+	void securityConfigurerBacksOffWhenOtherWebSecurityAdapterBeanPresent() {
+		this.contextRunner.withUserConfiguration(WebSecurity.class).run((context) -> {
+			assertThat(context.getBeansOfType(WebSecurityConfigurerAdapter.class).size()).isEqualTo(1);
+			assertThat(context.containsBean("securityAutoConfigurationTests.WebSecurity")).isTrue();
 		});
 	}
 
@@ -120,9 +156,7 @@ class SecurityAutoConfigurationTests {
 
 	@Test
 	void testJpaCoexistsHappily() {
-		this.contextRunner
-				.withPropertyValues("spring.datasource.url:jdbc:hsqldb:mem:testsecdb",
-						"spring.datasource.initialization-mode:never")
+		this.contextRunner.withPropertyValues("spring.datasource.url:jdbc:hsqldb:mem:testsecdb")
 				.withUserConfiguration(EntityConfiguration.class)
 				.withConfiguration(
 						AutoConfigurations.of(HibernateJpaAutoConfiguration.class, DataSourceAutoConfiguration.class))
@@ -143,11 +177,9 @@ class SecurityAutoConfigurationTests {
 				.run((context) -> {
 					DelegatingFilterProxyRegistrationBean bean = context.getBean("securityFilterChainRegistration",
 							DelegatingFilterProxyRegistrationBean.class);
-					@SuppressWarnings("unchecked")
-					EnumSet<DispatcherType> dispatcherTypes = (EnumSet<DispatcherType>) ReflectionTestUtils
-							.getField(bean, "dispatcherTypes");
-					assertThat(dispatcherTypes).containsOnly(DispatcherType.ASYNC, DispatcherType.ERROR,
-							DispatcherType.REQUEST);
+					assertThat(bean)
+							.extracting("dispatcherTypes", InstanceOfAssertFactories.iterable(DispatcherType.class))
+							.containsOnly(DispatcherType.ASYNC, DispatcherType.ERROR, DispatcherType.REQUEST);
 				});
 	}
 
@@ -157,11 +189,39 @@ class SecurityAutoConfigurationTests {
 				.withConfiguration(AutoConfigurations.of(SecurityFilterAutoConfiguration.class)).run((context) -> {
 					DelegatingFilterProxyRegistrationBean bean = context.getBean("securityFilterChainRegistration",
 							DelegatingFilterProxyRegistrationBean.class);
-					@SuppressWarnings("unchecked")
-					EnumSet<DispatcherType> dispatcherTypes = (EnumSet<DispatcherType>) ReflectionTestUtils
-							.getField(bean, "dispatcherTypes");
-					assertThat(dispatcherTypes).containsOnly(DispatcherType.INCLUDE, DispatcherType.ERROR);
+					assertThat(bean)
+							.extracting("dispatcherTypes", InstanceOfAssertFactories.iterable(DispatcherType.class))
+							.containsOnly(DispatcherType.INCLUDE, DispatcherType.ERROR);
 				});
+	}
+
+	@Test
+	void emptyFilterDispatcherTypesDoNotThrowException() {
+		this.contextRunner.withPropertyValues("spring.security.filter.dispatcher-types:")
+				.withConfiguration(AutoConfigurations.of(SecurityFilterAutoConfiguration.class)).run((context) -> {
+					DelegatingFilterProxyRegistrationBean bean = context.getBean("securityFilterChainRegistration",
+							DelegatingFilterProxyRegistrationBean.class);
+					assertThat(bean)
+							.extracting("dispatcherTypes", InstanceOfAssertFactories.iterable(DispatcherType.class))
+							.isEmpty();
+				});
+	}
+
+	@Test
+	void whenAConfigurationPropertyBindingConverterIsDefinedThenBindingToAnRsaKeySucceeds() {
+		this.contextRunner.withUserConfiguration(ConverterConfiguration.class, PropertiesConfiguration.class)
+				.withPropertyValues("jwt.public-key=classpath:public-key-location")
+				.run((context) -> assertThat(context.getBean(JwtProperties.class).getPublicKey()).isNotNull());
+	}
+
+	@Test
+	void whenTheBeanFactoryHasAConversionServiceAndAConfigurationPropertyBindingConverterIsDefinedThenBindingToAnRsaKeySucceeds() {
+		this.contextRunner
+				.withInitializer(
+						(context) -> context.getBeanFactory().setConversionService(new ApplicationConversionService()))
+				.withUserConfiguration(ConverterConfiguration.class, PropertiesConfiguration.class)
+				.withPropertyValues("jwt.public-key=classpath:public-key-location")
+				.run((context) -> assertThat(context.getBean(JwtProperties.class).getPublicKey()).isNotNull());
 	}
 
 	@Configuration(proxyBeanMethods = false)
@@ -197,6 +257,61 @@ class SecurityAutoConfigurationTests {
 	@Configuration(proxyBeanMethods = false)
 	@EnableWebSecurity
 	static class WebSecurity extends WebSecurityConfigurerAdapter {
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	static class TestSecurityFilterChainConfig {
+
+		@Bean
+		SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
+			return http.antMatcher("/**").authorizeRequests((authorize) -> authorize.anyRequest().authenticated())
+					.build();
+
+		}
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	static class ConverterConfiguration {
+
+		@Bean
+		@ConfigurationPropertiesBinding
+		Converter<String, TargetType> targetTypeConverter() {
+			return new Converter<String, TargetType>() {
+
+				@Override
+				public TargetType convert(String input) {
+					return new TargetType();
+				}
+
+			};
+		}
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	@EnableConfigurationProperties(JwtProperties.class)
+	static class PropertiesConfiguration {
+
+	}
+
+	@ConfigurationProperties("jwt")
+	static class JwtProperties {
+
+		private RSAPublicKey publicKey;
+
+		RSAPublicKey getPublicKey() {
+			return this.publicKey;
+		}
+
+		void setPublicKey(RSAPublicKey publicKey) {
+			this.publicKey = publicKey;
+		}
+
+	}
+
+	static class TargetType {
 
 	}
 

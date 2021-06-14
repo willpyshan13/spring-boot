@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.unix.Errors.NativeIoException;
@@ -35,8 +36,10 @@ import reactor.netty.http.server.HttpServerRequest;
 import reactor.netty.http.server.HttpServerResponse;
 import reactor.netty.http.server.HttpServerRoutes;
 
-import org.springframework.boot.web.server.GracefulShutdown;
+import org.springframework.boot.web.server.GracefulShutdownCallback;
+import org.springframework.boot.web.server.GracefulShutdownResult;
 import org.springframework.boot.web.server.PortInUseException;
+import org.springframework.boot.web.server.Shutdown;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.WebServerException;
 import org.springframework.http.server.reactive.ReactorHttpHandlerAdapter;
@@ -69,40 +72,21 @@ public class NettyWebServer implements WebServer {
 
 	private final Duration lifecycleTimeout;
 
-	private final GracefulShutdown shutdown;
+	private final GracefulShutdown gracefulShutdown;
 
 	private List<NettyRouteProvider> routeProviders = Collections.emptyList();
 
 	private volatile DisposableServer disposableServer;
 
-	public NettyWebServer(HttpServer httpServer, ReactorHttpHandlerAdapter handlerAdapter, Duration lifecycleTimeout) {
-		this(httpServer, handlerAdapter, lifecycleTimeout, null);
-	}
-
-	/**
-	 * Creates a {@code NettyWebServer}.
-	 * @param httpServer the Reactor Netty HTTP server
-	 * @param handlerAdapter the Spring WebFlux handler adapter
-	 * @param lifecycleTimeout lifecycle timeout
-	 * @param shutdownGracePeriod grace period for handler for graceful shutdown
-	 * @since 2.3.0
-	 */
 	public NettyWebServer(HttpServer httpServer, ReactorHttpHandlerAdapter handlerAdapter, Duration lifecycleTimeout,
-			Duration shutdownGracePeriod) {
+			Shutdown shutdown) {
 		Assert.notNull(httpServer, "HttpServer must not be null");
 		Assert.notNull(handlerAdapter, "HandlerAdapter must not be null");
 		this.lifecycleTimeout = lifecycleTimeout;
 		this.handler = handlerAdapter;
-		if (shutdownGracePeriod != null) {
-			this.httpServer = httpServer.channelGroup(new DefaultChannelGroup(new DefaultEventExecutor()));
-			NettyGracefulShutdown gracefulShutdown = new NettyGracefulShutdown(() -> this.disposableServer,
-					shutdownGracePeriod);
-			this.shutdown = gracefulShutdown;
-		}
-		else {
-			this.httpServer = httpServer;
-			this.shutdown = GracefulShutdown.IMMEDIATE;
-		}
+		this.httpServer = httpServer.channelGroup(new DefaultChannelGroup(new DefaultEventExecutor()));
+		this.gracefulShutdown = (shutdown == Shutdown.GRACEFUL) ? new GracefulShutdown(() -> this.disposableServer)
+				: null;
 	}
 
 	public void setRouteProviders(List<NettyRouteProvider> routeProviders) {
@@ -117,15 +101,48 @@ public class NettyWebServer implements WebServer {
 			}
 			catch (Exception ex) {
 				PortInUseException.ifCausedBy(ex, ChannelBindException.class, (bindException) -> {
-					if (!isPermissionDenied(bindException.getCause())) {
+					if (bindException.localPort() > 0 && !isPermissionDenied(bindException.getCause())) {
 						throw new PortInUseException(bindException.localPort(), ex);
 					}
 				});
 				throw new WebServerException("Unable to start Netty", ex);
 			}
-			logger.info("Netty started on port(s): " + getPort());
+			if (this.disposableServer != null) {
+				logger.info("Netty started" + getStartedOnMessage(this.disposableServer));
+			}
 			startDaemonAwaitThread(this.disposableServer);
 		}
+	}
+
+	private String getStartedOnMessage(DisposableServer server) {
+		StringBuilder message = new StringBuilder();
+		tryAppend(message, "port %s", () -> server.port());
+		tryAppend(message, "path %s", () -> server.path());
+		return (message.length() > 0) ? " on " + message : "";
+	}
+
+	private void tryAppend(StringBuilder message, String format, Supplier<Object> supplier) {
+		try {
+			Object value = supplier.get();
+			message.append((message.length() != 0) ? " " : "");
+			message.append(String.format(format, value));
+		}
+		catch (UnsupportedOperationException ex) {
+		}
+	}
+
+	DisposableServer startHttpServer() {
+		HttpServer server = this.httpServer;
+		if (this.routeProviders.isEmpty()) {
+			server = server.handle(this.handler);
+		}
+		else {
+			server = server.route(this::applyRouteProviders);
+		}
+		if (this.lifecycleTimeout != null) {
+			return server.bindNow(this.lifecycleTimeout);
+		}
+		return server.bindNow();
 	}
 
 	private boolean isPermissionDenied(Throwable bindExceptionCause) {
@@ -140,26 +157,12 @@ public class NettyWebServer implements WebServer {
 	}
 
 	@Override
-	public boolean shutDownGracefully() {
-		return this.shutdown.shutDownGracefully();
-	}
-
-	boolean inGracefulShutdown() {
-		return this.shutdown.isShuttingDown();
-	}
-
-	private DisposableServer startHttpServer() {
-		HttpServer server = this.httpServer;
-		if (this.routeProviders.isEmpty()) {
-			server = server.handle(this.handler);
+	public void shutDownGracefully(GracefulShutdownCallback callback) {
+		if (this.gracefulShutdown == null) {
+			callback.shutdownComplete(GracefulShutdownResult.IMMEDIATE);
+			return;
 		}
-		else {
-			server = server.route(this::applyRouteProviders);
-		}
-		if (this.lifecycleTimeout != null) {
-			return server.bindNow(this.lifecycleTimeout);
-		}
-		return server.bindNow();
+		this.gracefulShutdown.shutDownGracefully(callback);
 	}
 
 	private void applyRouteProviders(HttpServerRoutes routes) {
@@ -186,11 +189,19 @@ public class NettyWebServer implements WebServer {
 	@Override
 	public void stop() throws WebServerException {
 		if (this.disposableServer != null) {
-			if (this.lifecycleTimeout != null) {
-				this.disposableServer.disposeNow(this.lifecycleTimeout);
+			if (this.gracefulShutdown != null) {
+				this.gracefulShutdown.abort();
 			}
-			else {
-				this.disposableServer.disposeNow();
+			try {
+				if (this.lifecycleTimeout != null) {
+					this.disposableServer.disposeNow(this.lifecycleTimeout);
+				}
+				else {
+					this.disposableServer.disposeNow();
+				}
+			}
+			catch (IllegalStateException ex) {
+				// Continue
 			}
 			this.disposableServer = null;
 		}
@@ -199,9 +210,14 @@ public class NettyWebServer implements WebServer {
 	@Override
 	public int getPort() {
 		if (this.disposableServer != null) {
-			return this.disposableServer.port();
+			try {
+				return this.disposableServer.port();
+			}
+			catch (UnsupportedOperationException ex) {
+				return -1;
+			}
 		}
-		return 0;
+		return -1;
 	}
 
 }

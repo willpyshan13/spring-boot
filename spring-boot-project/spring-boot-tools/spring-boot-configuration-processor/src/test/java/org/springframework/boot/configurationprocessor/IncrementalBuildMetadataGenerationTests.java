@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package org.springframework.boot.configurationprocessor;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.configurationprocessor.metadata.ConfigurationMetadata;
@@ -23,6 +24,7 @@ import org.springframework.boot.configurationprocessor.metadata.Metadata;
 import org.springframework.boot.configurationsample.incremental.BarProperties;
 import org.springframework.boot.configurationsample.incremental.FooProperties;
 import org.springframework.boot.configurationsample.incremental.RenamedBarProperties;
+import org.springframework.boot.configurationsample.simple.ClassWithNestedProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -68,11 +70,11 @@ class IncrementalBuildMetadataGenerationTests extends AbstractMetadataGeneration
 		assertThat(metadata).has(Metadata.withProperty("bar.counter").withDefaultValue(0));
 		project.replaceText(BarProperties.class, "@ConfigurationProperties", "//@ConfigurationProperties");
 		metadata = project.incrementalBuild(BarProperties.class);
-		assertThat(metadata).has(Metadata.withProperty("foo.counter").withDefaultValue(0));
-		assertThat(metadata).isNotEqualTo(Metadata.withProperty("bar.counter"));
+		assertThat(metadata).isNull();
 	}
 
 	@Test
+	@Disabled("gh-26271")
 	void incrementalBuildTypeRenamed() throws Exception {
 		TestProject project = new TestProject(this.tempDir, FooProperties.class, BarProperties.class);
 		ConfigurationMetadata metadata = project.fullBuild();
@@ -90,6 +92,14 @@ class IncrementalBuildMetadataGenerationTests extends AbstractMetadataGeneration
 				.doesNotHave(Metadata.withProperty("bar.counter").fromSource(BarProperties.class).withDefaultValue(0));
 		assertThat(metadata)
 				.has(Metadata.withProperty("bar.counter").withDefaultValue(0).fromSource(RenamedBarProperties.class));
+	}
+
+	@Test
+	void incrementalBuildDoesNotDeleteItems() throws Exception {
+		TestProject project = new TestProject(this.tempDir, ClassWithNestedProperties.class, FooProperties.class);
+		ConfigurationMetadata initialMetadata = project.fullBuild();
+		ConfigurationMetadata updatedMetadata = project.incrementalBuild(FooProperties.class);
+		assertThat(initialMetadata.getItems()).isEqualTo(updatedMetadata.getItems());
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,12 @@ package org.springframework.boot.web.servlet.server;
 import java.io.File;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -36,6 +38,7 @@ import javax.servlet.SessionCookieConfig;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import org.springframework.boot.context.properties.PropertyMapper;
 import org.springframework.boot.web.server.AbstractConfigurableWebServerFactory;
 import org.springframework.boot.web.server.MimeMappings;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
@@ -65,7 +68,7 @@ public abstract class AbstractServletWebServerFactory extends AbstractConfigurab
 
 	private Session session = new Session();
 
-	private boolean registerDefaultServlet = true;
+	private boolean registerDefaultServlet = false;
 
 	private MimeMappings mimeMappings = new MimeMappings(MimeMappings.DEFAULT);
 
@@ -80,6 +83,8 @@ public abstract class AbstractServletWebServerFactory extends AbstractConfigurab
 	private final DocumentRoot documentRoot = new DocumentRoot(this.logger);
 
 	private final StaticResourceJars staticResourceJars = new StaticResourceJars();
+
+	private final Set<String> webListenerClassNames = new HashSet<>();
 
 	/**
 	 * Create a new {@link AbstractServletWebServerFactory} instance.
@@ -283,6 +288,15 @@ public abstract class AbstractServletWebServerFactory extends AbstractConfigurab
 		return this.session.getSessionStoreDirectory().getValidDirectory(mkdirs);
 	}
 
+	@Override
+	public void addWebListeners(String... webListenerClassNames) {
+		this.webListenerClassNames.addAll(Arrays.asList(webListenerClassNames));
+	}
+
+	protected final Set<String> getWebListenerClassNames() {
+		return this.webListenerClassNames;
+	}
+
 	/**
 	 * {@link ServletContextInitializer} to apply appropriate parts of the {@link Session}
 	 * configuration.
@@ -305,27 +319,14 @@ public abstract class AbstractServletWebServerFactory extends AbstractConfigurab
 
 		private void configureSessionCookie(SessionCookieConfig config) {
 			Session.Cookie cookie = this.session.getCookie();
-			if (cookie.getName() != null) {
-				config.setName(cookie.getName());
-			}
-			if (cookie.getDomain() != null) {
-				config.setDomain(cookie.getDomain());
-			}
-			if (cookie.getPath() != null) {
-				config.setPath(cookie.getPath());
-			}
-			if (cookie.getComment() != null) {
-				config.setComment(cookie.getComment());
-			}
-			if (cookie.getHttpOnly() != null) {
-				config.setHttpOnly(cookie.getHttpOnly());
-			}
-			if (cookie.getSecure() != null) {
-				config.setSecure(cookie.getSecure());
-			}
-			if (cookie.getMaxAge() != null) {
-				config.setMaxAge((int) cookie.getMaxAge().getSeconds());
-			}
+			PropertyMapper map = PropertyMapper.get().alwaysApplyingWhenNonNull();
+			map.from(cookie::getName).to(config::setName);
+			map.from(cookie::getDomain).to(config::setDomain);
+			map.from(cookie::getPath).to(config::setPath);
+			map.from(cookie::getComment).to(config::setComment);
+			map.from(cookie::getHttpOnly).to(config::setHttpOnly);
+			map.from(cookie::getSecure).to(config::setSecure);
+			map.from(cookie::getMaxAge).asInt(Duration::getSeconds).to(config::setMaxAge);
 		}
 
 		private Set<javax.servlet.SessionTrackingMode> unwrap(Set<Session.SessionTrackingMode> modes) {

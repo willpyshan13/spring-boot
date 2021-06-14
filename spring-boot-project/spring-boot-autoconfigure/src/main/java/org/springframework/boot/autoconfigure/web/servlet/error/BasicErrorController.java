@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.springframework.boot.autoconfigure.web.ErrorProperties;
+import org.springframework.boot.web.error.ErrorAttributeOptions;
+import org.springframework.boot.web.error.ErrorAttributeOptions.Include;
 import org.springframework.boot.web.servlet.error.ErrorAttributes;
 import org.springframework.boot.web.servlet.server.AbstractServletWebServerFactory;
 import org.springframework.http.HttpStatus;
@@ -79,17 +81,11 @@ public class BasicErrorController extends AbstractErrorController {
 		this.errorProperties = errorProperties;
 	}
 
-	@Override
-	public String getErrorPath() {
-		return null;
-	}
-
 	@RequestMapping(produces = MediaType.TEXT_HTML_VALUE)
 	public ModelAndView errorHtml(HttpServletRequest request, HttpServletResponse response) {
 		HttpStatus status = getStatus(request);
-		Map<String, Object> model = Collections.unmodifiableMap(getErrorAttributes(request,
-				isIncludeStackTrace(request, MediaType.TEXT_HTML), isIncludeMessage(request, MediaType.TEXT_HTML),
-				isIncludeBindingErrors(request, MediaType.TEXT_HTML)));
+		Map<String, Object> model = Collections
+				.unmodifiableMap(getErrorAttributes(request, getErrorAttributeOptions(request, MediaType.TEXT_HTML)));
 		response.setStatus(status.value());
 		ModelAndView modelAndView = resolveErrorView(request, response, status, model);
 		return (modelAndView != null) ? modelAndView : new ModelAndView("error", model);
@@ -101,8 +97,7 @@ public class BasicErrorController extends AbstractErrorController {
 		if (status == HttpStatus.NO_CONTENT) {
 			return new ResponseEntity<>(status);
 		}
-		Map<String, Object> body = getErrorAttributes(request, isIncludeStackTrace(request, MediaType.ALL),
-				isIncludeMessage(request, MediaType.ALL), isIncludeBindingErrors(request, MediaType.TEXT_HTML));
+		Map<String, Object> body = getErrorAttributes(request, getErrorAttributeOptions(request, MediaType.ALL));
 		return new ResponseEntity<>(body, status);
 	}
 
@@ -112,19 +107,34 @@ public class BasicErrorController extends AbstractErrorController {
 		return ResponseEntity.status(status).build();
 	}
 
+	protected ErrorAttributeOptions getErrorAttributeOptions(HttpServletRequest request, MediaType mediaType) {
+		ErrorAttributeOptions options = ErrorAttributeOptions.defaults();
+		if (this.errorProperties.isIncludeException()) {
+			options = options.including(Include.EXCEPTION);
+		}
+		if (isIncludeStackTrace(request, mediaType)) {
+			options = options.including(Include.STACK_TRACE);
+		}
+		if (isIncludeMessage(request, mediaType)) {
+			options = options.including(Include.MESSAGE);
+		}
+		if (isIncludeBindingErrors(request, mediaType)) {
+			options = options.including(Include.BINDING_ERRORS);
+		}
+		return options;
+	}
+
 	/**
 	 * Determine if the stacktrace attribute should be included.
 	 * @param request the source request
 	 * @param produces the media type produced (or {@code MediaType.ALL})
 	 * @return if the stacktrace attribute should be included
 	 */
-	@SuppressWarnings("deprecation")
 	protected boolean isIncludeStackTrace(HttpServletRequest request, MediaType produces) {
 		switch (getErrorProperties().getIncludeStacktrace()) {
 		case ALWAYS:
 			return true;
 		case ON_PARAM:
-		case ON_TRACE_PARAM:
 			return getTraceParameter(request);
 		default:
 			return false;
@@ -155,7 +165,7 @@ public class BasicErrorController extends AbstractErrorController {
 	 * @return if the errors attribute should be included
 	 */
 	protected boolean isIncludeBindingErrors(HttpServletRequest request, MediaType produces) {
-		switch (getErrorProperties().getIncludeMessage()) {
+		switch (getErrorProperties().getIncludeBindingErrors()) {
 		case ALWAYS:
 			return true;
 		case ON_PARAM:

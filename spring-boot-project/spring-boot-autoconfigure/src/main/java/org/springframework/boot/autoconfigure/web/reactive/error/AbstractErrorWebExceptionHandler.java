@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,9 @@ import reactor.core.publisher.Mono;
 
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.template.TemplateAvailabilityProviders;
-import org.springframework.boot.autoconfigure.web.ResourceProperties;
+import org.springframework.boot.autoconfigure.web.WebProperties.Resources;
+import org.springframework.boot.web.error.ErrorAttributeOptions;
+import org.springframework.boot.web.error.ErrorAttributeOptions.Include;
 import org.springframework.boot.web.reactive.error.ErrorAttributes;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
 import org.springframework.context.ApplicationContext;
@@ -80,7 +82,7 @@ public abstract class AbstractErrorWebExceptionHandler implements ErrorWebExcept
 
 	private final ErrorAttributes errorAttributes;
 
-	private final ResourceProperties resourceProperties;
+	private final Resources resources;
 
 	private final TemplateAvailabilityProviders templateAvailabilityProviders;
 
@@ -90,13 +92,35 @@ public abstract class AbstractErrorWebExceptionHandler implements ErrorWebExcept
 
 	private List<ViewResolver> viewResolvers = Collections.emptyList();
 
-	public AbstractErrorWebExceptionHandler(ErrorAttributes errorAttributes, ResourceProperties resourceProperties,
+	/**
+	 * Create a new {@code AbstractErrorWebExceptionHandler}.
+	 * @param errorAttributes the error attributes
+	 * @param resourceProperties the resource properties
+	 * @param applicationContext the application context
+	 * @deprecated since 2.4.0 for removal in 2.6.0 in favor of
+	 * {@link #AbstractErrorWebExceptionHandler(ErrorAttributes, Resources, ApplicationContext)}
+	 */
+	@Deprecated
+	public AbstractErrorWebExceptionHandler(ErrorAttributes errorAttributes,
+			org.springframework.boot.autoconfigure.web.ResourceProperties resourceProperties,
+			ApplicationContext applicationContext) {
+		this(errorAttributes, (Resources) resourceProperties, applicationContext);
+	}
+
+	/**
+	 * Create a new {@code AbstractErrorWebExceptionHandler}.
+	 * @param errorAttributes the error attributes
+	 * @param resources the resources configuration properties
+	 * @param applicationContext the application context
+	 * @since 2.4.0
+	 */
+	public AbstractErrorWebExceptionHandler(ErrorAttributes errorAttributes, Resources resources,
 			ApplicationContext applicationContext) {
 		Assert.notNull(errorAttributes, "ErrorAttributes must not be null");
-		Assert.notNull(resourceProperties, "ResourceProperties must not be null");
+		Assert.notNull(resources, "Resources must not be null");
 		Assert.notNull(applicationContext, "ApplicationContext must not be null");
 		this.errorAttributes = errorAttributes;
-		this.resourceProperties = resourceProperties;
+		this.resources = resources;
 		this.applicationContext = applicationContext;
 		this.templateAvailabilityProviders = new TemplateAvailabilityProviders(applicationContext);
 	}
@@ -133,27 +157,24 @@ public abstract class AbstractErrorWebExceptionHandler implements ErrorWebExcept
 	 * @param request the source request
 	 * @param includeStackTrace whether to include the error stacktrace information
 	 * @return the error attributes as a Map
-	 * @deprecated since 2.3.0 in favor of
-	 * {@link #getErrorAttributes(ServerRequest, boolean, boolean, boolean)}
+	 * @deprecated since 2.3.0 for removal in 2.5.0 in favor of
+	 * {@link #getErrorAttributes(ServerRequest, ErrorAttributeOptions)}
 	 */
 	@Deprecated
 	protected Map<String, Object> getErrorAttributes(ServerRequest request, boolean includeStackTrace) {
-		return this.errorAttributes.getErrorAttributes(request, includeStackTrace, false, false);
+		return getErrorAttributes(request,
+				(includeStackTrace) ? ErrorAttributeOptions.of(Include.STACK_TRACE) : ErrorAttributeOptions.defaults());
 	}
 
 	/**
 	 * Extract the error attributes from the current request, to be used to populate error
 	 * views or JSON payloads.
 	 * @param request the source request
-	 * @param includeStackTrace whether to include the stacktrace attribute
-	 * @param includeMessage whether to include the message attribute
-	 * @param includeBindingErrors whether to include the errors attribute
+	 * @param options options to control error attributes
 	 * @return the error attributes as a Map
 	 */
-	protected Map<String, Object> getErrorAttributes(ServerRequest request, boolean includeStackTrace,
-			boolean includeMessage, boolean includeBindingErrors) {
-		return this.errorAttributes.getErrorAttributes(request, includeStackTrace, includeMessage,
-				includeBindingErrors);
+	protected Map<String, Object> getErrorAttributes(ServerRequest request, ErrorAttributeOptions options) {
+		return this.errorAttributes.getErrorAttributes(request, options);
 	}
 
 	/**
@@ -225,7 +246,7 @@ public abstract class AbstractErrorWebExceptionHandler implements ErrorWebExcept
 	}
 
 	private Resource resolveResource(String viewName) {
-		for (String location : this.resourceProperties.getStaticLocations()) {
+		for (String location : this.resources.getStaticLocations()) {
 			try {
 				Resource resource = this.applicationContext.getResource(location);
 				resource = resource.createRelative(viewName + ".html");

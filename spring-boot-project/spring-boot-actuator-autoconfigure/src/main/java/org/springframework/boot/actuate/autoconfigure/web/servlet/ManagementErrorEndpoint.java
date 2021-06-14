@@ -19,6 +19,8 @@ package org.springframework.boot.actuate.autoconfigure.web.servlet;
 import java.util.Map;
 
 import org.springframework.boot.autoconfigure.web.ErrorProperties;
+import org.springframework.boot.web.error.ErrorAttributeOptions;
+import org.springframework.boot.web.error.ErrorAttributeOptions.Include;
 import org.springframework.boot.web.servlet.error.ErrorAttributes;
 import org.springframework.boot.web.servlet.error.ErrorController;
 import org.springframework.stereotype.Controller;
@@ -53,8 +55,24 @@ public class ManagementErrorEndpoint {
 	@RequestMapping("${server.error.path:${error.path:/error}}")
 	@ResponseBody
 	public Map<String, Object> invoke(ServletWebRequest request) {
-		return this.errorAttributes.getErrorAttributes(request, includeStackTrace(request), includeMessage(request),
-				includeBindingErrors(request));
+		return this.errorAttributes.getErrorAttributes(request, getErrorAttributeOptions(request));
+	}
+
+	private ErrorAttributeOptions getErrorAttributeOptions(ServletWebRequest request) {
+		ErrorAttributeOptions options = ErrorAttributeOptions.defaults();
+		if (this.errorProperties.isIncludeException()) {
+			options = options.including(Include.EXCEPTION);
+		}
+		if (includeStackTrace(request)) {
+			options = options.including(Include.STACK_TRACE);
+		}
+		if (includeMessage(request)) {
+			options = options.including(Include.MESSAGE);
+		}
+		if (includeBindingErrors(request)) {
+			options = options.including(Include.BINDING_ERRORS);
+		}
+		return options;
 	}
 
 	private boolean includeStackTrace(ServletWebRequest request) {
@@ -62,7 +80,6 @@ public class ManagementErrorEndpoint {
 		case ALWAYS:
 			return true;
 		case ON_PARAM:
-		case ON_TRACE_PARAM:
 			return getBooleanParameter(request, "trace");
 		default:
 			return false;

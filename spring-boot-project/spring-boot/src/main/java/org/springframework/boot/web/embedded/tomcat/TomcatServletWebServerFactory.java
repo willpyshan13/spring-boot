@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,6 +71,7 @@ import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
 import org.springframework.boot.web.servlet.server.AbstractServletWebServerFactory;
 import org.springframework.context.ResourceLoaderAware;
+import org.springframework.core.NativeDetector;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
@@ -130,7 +131,9 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 
 	private String protocol = DEFAULT_PROTOCOL;
 
-	private Set<String> tldSkipPatterns = new LinkedHashSet<>(TldSkipPatterns.DEFAULT);
+	private Set<String> tldSkipPatterns = new LinkedHashSet<>(TldPatterns.DEFAULT_SKIP);
+
+	private Set<String> tldScanPatterns = new LinkedHashSet<>(TldPatterns.DEFAULT_SCAN);
 
 	private Charset uriEncoding = DEFAULT_CHARSET;
 
@@ -164,9 +167,14 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 	}
 
 	private static List<LifecycleListener> getDefaultLifecycleListeners() {
-		AprLifecycleListener aprLifecycleListener = new AprLifecycleListener();
-		return AprLifecycleListener.isAprAvailable() ? new ArrayList<>(Arrays.asList(aprLifecycleListener))
-				: new ArrayList<>();
+		ArrayList<LifecycleListener> lifecycleListeners = new ArrayList<>();
+		if (!NativeDetector.inNativeImage()) {
+			AprLifecycleListener aprLifecycleListener = new AprLifecycleListener();
+			if (AprLifecycleListener.isAprAvailable()) {
+				lifecycleListeners.add(aprLifecycleListener);
+			}
+		}
+		return lifecycleListeners;
 	}
 
 	@Override
@@ -214,14 +222,13 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 				: ClassUtils.getDefaultClassLoader());
 		resetDefaultLocaleMapping(context);
 		addLocaleMappings(context);
-		context.setUseRelativeRedirects(false);
 		try {
 			context.setCreateUploadTargets(true);
 		}
 		catch (NoSuchMethodError ex) {
 			// Tomcat is < 8.5.39. Continue.
 		}
-		configureTldSkipPatterns(context);
+		configureTldPatterns(context);
 		WebappLoader loader = new WebappLoader();
 		loader.setLoaderClass(TomcatEmbeddedWebappClassLoader.class.getName());
 		loader.setDelegate(true);
@@ -255,9 +262,10 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 				(locale, charset) -> context.addLocaleEncodingMappingParameter(locale.toString(), charset.toString()));
 	}
 
-	private void configureTldSkipPatterns(TomcatEmbeddedContext context) {
+	private void configureTldPatterns(TomcatEmbeddedContext context) {
 		StandardJarScanFilter filter = new StandardJarScanFilter();
 		filter.setTldSkip(StringUtils.collectionToCommaDelimitedString(this.tldSkipPatterns));
+		filter.setTldScan(StringUtils.collectionToCommaDelimitedString(this.tldScanPatterns));
 		context.getJarScanner().setJarScanFilter(filter);
 	}
 
@@ -289,7 +297,8 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 	private void addJasperInitializer(TomcatEmbeddedContext context) {
 		try {
 			ServletContainerInitializer initializer = (ServletContainerInitializer) ClassUtils
-					.forName("org.apache.jasper.servlet.JasperInitializer", null).newInstance();
+					.forName("org.apache.jasper.servlet.JasperInitializer", null).getDeclaredConstructor()
+					.newInstance();
 			context.addServletContainerInitializer(initializer, null);
 		}
 		catch (Exception ex) {
@@ -302,7 +311,7 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 		int port = Math.max(getPort(), 0);
 		connector.setPort(port);
 		if (StringUtils.hasText(getServerHeader())) {
-			connector.setAttribute("server", getServerHeader());
+			connector.setProperty("server", getServerHeader());
 		}
 		if (connector.getProtocolHandler() instanceof AbstractProtocol) {
 			customizeProtocol((AbstractProtocol<?>) connector.getProtocolHandler());
@@ -313,6 +322,9 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 		}
 		// Don't bind to the socket prematurely if ApplicationContext is slow to start
 		connector.setProperty("bindOnInit", "false");
+		if (getHttp2() != null && getHttp2().isEnabled()) {
+			connector.addUpgradeProtocol(new Http2Protocol());
+		}
 		if (getSsl() != null && getSsl().isEnabled()) {
 			customizeSsl(connector);
 		}
@@ -337,9 +349,6 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 
 	private void customizeSsl(Connector connector) {
 		new SslConnectorCustomizer(getSsl(), getSslStoreProvider()).customize(connector);
-		if (getHttp2() != null && getHttp2().isEnabled()) {
-			connector.addUpgradeProtocol(new Http2Protocol());
-		}
 	}
 
 	/**
@@ -373,6 +382,9 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 		}
 		configureSession(context);
 		new DisableReferenceClearingContextCustomizer().customize(context);
+		for (String webListenerClassName : getWebListenerClassNames()) {
+			context.addApplicationListener(webListenerClassName);
+		}
 		for (TomcatContextCustomizer customizer : this.tomcatContextCustomizers) {
 			customizer.customize(context);
 		}
@@ -435,7 +447,7 @@ public class TomcatServletWebServerFactory extends AbstractServletWebServerFacto
 	 * @return a new {@link TomcatWebServer} instance
 	 */
 	protected TomcatWebServer getTomcatWebServer(Tomcat tomcat) {
-		return new TomcatWebServer(tomcat, getPort() >= 0, getShutdown().getGracePeriod());
+		return new TomcatWebServer(tomcat, getPort() >= 0, getShutdown());
 	}
 
 	@Override

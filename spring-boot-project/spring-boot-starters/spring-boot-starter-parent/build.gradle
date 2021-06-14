@@ -27,7 +27,7 @@ publishing.publications.withType(MavenPublication) {
 				delegate."project.reporting.outputEncoding"('UTF-8')
 			}
 		}
-		root.issueManagement.plus {
+		root.scm.plus {
 			build {
 				resources {
 					resource {
@@ -125,6 +125,7 @@ publishing.publications.withType(MavenPublication) {
 							delegate.groupId('org.apache.maven.plugins')
 							delegate.artifactId('maven-resources-plugin')
 							configuration {
+								delegate.propertiesEncoding('${project.build.sourceEncoding}')
 								delimiters {
 									delegate.delimiter('${resource.delimiter}')
 								}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,14 +22,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 import org.springframework.boot.buildpack.platform.docker.type.ContainerConfig;
-import org.springframework.boot.buildpack.platform.docker.type.VolumeName;
 import org.springframework.util.StringUtils;
 
 /**
  * An individual build phase executed as part of a {@link Lifecycle} run.
  *
  * @author Phillip Webb
+ * @author Scott Frederick
  */
 class Phase {
 
@@ -43,7 +44,9 @@ class Phase {
 
 	private final List<String> args = new ArrayList<>();
 
-	private final Map<VolumeName, String> binds = new LinkedHashMap<>();
+	private final List<Binding> bindings = new ArrayList<>();
+
+	private final Map<String, String> env = new LinkedHashMap<>();
 
 	/**
 	 * Create a new {@link Phase} instance.
@@ -83,11 +86,19 @@ class Phase {
 
 	/**
 	 * Update this phase with an addition volume binding.
-	 * @param source the source volume
-	 * @param dest the destination location
+	 * @param binding the binding
 	 */
-	void withBinds(VolumeName source, String dest) {
-		this.binds.put(source, dest);
+	void withBinding(Binding binding) {
+		this.bindings.add(binding);
+	}
+
+	/**
+	 * Update this phase with an additional environment variable.
+	 * @param name the variable name
+	 * @param value the variable value
+	 */
+	void withEnv(String name, String value) {
+		this.env.put(name, value);
 	}
 
 	/**
@@ -110,11 +121,12 @@ class Phase {
 	void apply(ContainerConfig.Update update) {
 		if (this.daemonAccess) {
 			update.withUser("root");
-			update.withBind(DOMAIN_SOCKET_PATH, DOMAIN_SOCKET_PATH);
+			update.withBinding(Binding.from(DOMAIN_SOCKET_PATH, DOMAIN_SOCKET_PATH));
 		}
-		update.withCommand("/lifecycle/" + this.name, StringUtils.toStringArray(this.args));
+		update.withCommand("/cnb/lifecycle/" + this.name, StringUtils.toStringArray(this.args));
 		update.withLabel("author", "spring-boot");
-		this.binds.forEach(update::withBind);
+		this.bindings.forEach(update::withBinding);
+		this.env.forEach(update::withEnv);
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
@@ -30,6 +31,7 @@ import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import org.springframework.boot.buildpack.platform.docker.type.Binding;
 import org.springframework.boot.buildpack.platform.docker.type.ImageReference;
 import org.springframework.boot.buildpack.platform.io.Owner;
 import org.springframework.boot.buildpack.platform.io.TarArchive;
@@ -55,7 +57,7 @@ public class BuildRequestTests {
 		writeTestJarFile(jarFile);
 		BuildRequest request = BuildRequest.forJarFile(jarFile);
 		assertThat(request.getName().toString()).isEqualTo("docker.io/library/my-app:0.0.1");
-		assertThat(request.getBuilder().toString()).isEqualTo(BuildRequest.DEFAULT_BUILDER_IMAGE_NAME);
+		assertThat(request.getBuilder().toString()).isEqualTo("docker.io/" + BuildRequest.DEFAULT_BUILDER_IMAGE_NAME);
 		assertThat(request.getApplicationContent(Owner.ROOT)).satisfies(this::hasExpectedJarContent);
 		assertThat(request.getEnv()).isEmpty();
 	}
@@ -66,7 +68,7 @@ public class BuildRequestTests {
 		writeTestJarFile(jarFile);
 		BuildRequest request = BuildRequest.forJarFile(ImageReference.of("test-app"), jarFile);
 		assertThat(request.getName().toString()).isEqualTo("docker.io/library/test-app:latest");
-		assertThat(request.getBuilder().toString()).isEqualTo(BuildRequest.DEFAULT_BUILDER_IMAGE_NAME);
+		assertThat(request.getBuilder().toString()).isEqualTo("docker.io/" + BuildRequest.DEFAULT_BUILDER_IMAGE_NAME);
 		assertThat(request.getApplicationContent(Owner.ROOT)).satisfies(this::hasExpectedJarContent);
 		assertThat(request.getEnv()).isEmpty();
 	}
@@ -82,7 +84,6 @@ public class BuildRequestTests {
 		assertThatIllegalArgumentException()
 				.isThrownBy(() -> BuildRequest.forJarFile(new File(this.tempDir, "missing.jar")))
 				.withMessage("JarFile must exist");
-
 	}
 
 	@Test
@@ -96,6 +97,29 @@ public class BuildRequestTests {
 		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"))
 				.withBuilder(ImageReference.of("spring/builder"));
 		assertThat(request.getBuilder().toString()).isEqualTo("docker.io/spring/builder:latest");
+	}
+
+	@Test
+	void withBuilderWhenHasDigestUpdatesBuilder() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar")).withBuilder(ImageReference
+				.of("spring/builder@sha256:6e9f67fa63b0323e9a1e587fd71c561ba48a034504fb804fd26fd8800039835d"));
+		assertThat(request.getBuilder().toString()).isEqualTo(
+				"docker.io/spring/builder@sha256:6e9f67fa63b0323e9a1e587fd71c561ba48a034504fb804fd26fd8800039835d");
+	}
+
+	@Test
+	void withRunImageUpdatesRunImage() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"))
+				.withRunImage(ImageReference.of("example.com/custom/run-image:latest"));
+		assertThat(request.getRunImage().toString()).isEqualTo("example.com/custom/run-image:latest");
+	}
+
+	@Test
+	void withRunImageWhenHasDigestUpdatesRunImage() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar")).withRunImage(ImageReference
+				.of("example.com/custom/run-image@sha256:6e9f67fa63b0323e9a1e587fd71c561ba48a034504fb804fd26fd8800039835d"));
+		assertThat(request.getRunImage().toString()).isEqualTo(
+				"example.com/custom/run-image@sha256:6e9f67fa63b0323e9a1e587fd71c561ba48a034504fb804fd26fd8800039835d");
 	}
 
 	@Test
@@ -139,6 +163,40 @@ public class BuildRequestTests {
 		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"));
 		assertThatIllegalArgumentException().isThrownBy(() -> request.withEnv("test", null))
 				.withMessage("Value must not be empty");
+	}
+
+	@Test
+	void withBuildpacksAddsBuildpacks() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"));
+		BuildpackReference buildpackReference1 = BuildpackReference.of("example/buildpack1");
+		BuildpackReference buildpackReference2 = BuildpackReference.of("example/buildpack2");
+		BuildRequest withBuildpacks = request.withBuildpacks(buildpackReference1, buildpackReference2);
+		assertThat(request.getBuildpacks()).isEmpty();
+		assertThat(withBuildpacks.getBuildpacks()).containsExactly(buildpackReference1, buildpackReference2);
+	}
+
+	@Test
+	void withBuildpacksWhenBuildpacksIsNullThrowsException() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"));
+		assertThatIllegalArgumentException().isThrownBy(() -> request.withBuildpacks((List<BuildpackReference>) null))
+				.withMessage("Buildpacks must not be null");
+	}
+
+	@Test
+	void withBindingsAddsBindings() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"));
+		BuildRequest withBindings = request.withBindings(Binding.of("/host/path:/container/path:ro"),
+				Binding.of("volume-name:/container/path:rw"));
+		assertThat(request.getBindings()).isEmpty();
+		assertThat(withBindings.getBindings()).containsExactly(Binding.of("/host/path:/container/path:ro"),
+				Binding.of("volume-name:/container/path:rw"));
+	}
+
+	@Test
+	void withBindingsWhenBindingsIsNullThrowsException() throws IOException {
+		BuildRequest request = BuildRequest.forJarFile(writeTestJarFile("my-app-0.0.1.jar"));
+		assertThatIllegalArgumentException().isThrownBy(() -> request.withBindings((List<Binding>) null))
+				.withMessage("Bindings must not be null");
 	}
 
 	private void hasExpectedJarContent(TarArchive archive) {

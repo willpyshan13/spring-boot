@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,9 +23,11 @@ import java.util.stream.Collectors;
 
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
+import org.gradle.api.Task;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.plugins.JavaPluginConvention;
+import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.compile.JavaCompile;
 
@@ -37,7 +39,10 @@ import org.springframework.util.StringUtils;
  *
  * <ul>
  * <li>Adding a dependency on the configuration properties annotation processor.
- * <li>Configure the additional metadata locations annotation processor compiler argument
+ * <li>Configuring the additional metadata locations annotation processor compiler
+ * argument.
+ * <li>Adding the outputs of the processResources task as inputs of the compileJava task
+ * to ensure that the additional metadata is available when the annotation processor runs.
  * <li>Defining an artifact for the resulting configuration property metadata so that it
  * can be consumed by downstream projects.
  * </ul>
@@ -83,6 +88,8 @@ public class ConfigurationPropertiesPlugin implements Plugin<Project> {
 	private void configureAdditionalMetadataLocationsCompilerArgument(Project project) {
 		JavaCompile compileJava = project.getTasks().withType(JavaCompile.class)
 				.getByName(JavaPlugin.COMPILE_JAVA_TASK_NAME);
+		((Task) compileJava).getInputs().files(project.getTasks().getByName(JavaPlugin.PROCESS_RESOURCES_TASK_NAME))
+				.withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("processed resources");
 		SourceSet mainSourceSet = project.getConvention().getPlugin(JavaPluginConvention.class).getSourceSets()
 				.getByName(SourceSet.MAIN_SOURCE_SET_NAME);
 		compileJava.getOptions().getCompilerArgs()

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,9 +27,12 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.springframework.boot.web.error.ErrorAttributeOptions;
+import org.springframework.boot.web.error.ErrorAttributeOptions.Include;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
+import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.ObjectError;
@@ -65,25 +68,7 @@ import org.springframework.web.servlet.ModelAndView;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class DefaultErrorAttributes implements ErrorAttributes, HandlerExceptionResolver, Ordered {
 
-	private static final String ERROR_ATTRIBUTE = DefaultErrorAttributes.class.getName() + ".ERROR";
-
-	private final boolean includeException;
-
-	/**
-	 * Create a new {@link DefaultErrorAttributes} instance that does not include the
-	 * "exception" attribute.
-	 */
-	public DefaultErrorAttributes() {
-		this(false);
-	}
-
-	/**
-	 * Create a new {@link DefaultErrorAttributes} instance.
-	 * @param includeException whether to include the "exception" attribute
-	 */
-	public DefaultErrorAttributes(boolean includeException) {
-		this.includeException = includeException;
-	}
+	private static final String ERROR_INTERNAL_ATTRIBUTE = DefaultErrorAttributes.class.getName() + ".ERROR";
 
 	@Override
 	public int getOrder() {
@@ -98,22 +83,32 @@ public class DefaultErrorAttributes implements ErrorAttributes, HandlerException
 	}
 
 	private void storeErrorAttributes(HttpServletRequest request, Exception ex) {
-		request.setAttribute(ERROR_ATTRIBUTE, ex);
+		request.setAttribute(ERROR_INTERNAL_ATTRIBUTE, ex);
 	}
 
 	@Override
-	@Deprecated
-	public Map<String, Object> getErrorAttributes(WebRequest webRequest, boolean includeStackTrace) {
-		return getErrorAttributes(webRequest, includeStackTrace, false, false);
+	public Map<String, Object> getErrorAttributes(WebRequest webRequest, ErrorAttributeOptions options) {
+		Map<String, Object> errorAttributes = getErrorAttributes(webRequest, options.isIncluded(Include.STACK_TRACE));
+		if (!options.isIncluded(Include.EXCEPTION)) {
+			errorAttributes.remove("exception");
+		}
+		if (!options.isIncluded(Include.STACK_TRACE)) {
+			errorAttributes.remove("trace");
+		}
+		if (!options.isIncluded(Include.MESSAGE) && errorAttributes.get("message") != null) {
+			errorAttributes.remove("message");
+		}
+		if (!options.isIncluded(Include.BINDING_ERRORS)) {
+			errorAttributes.remove("errors");
+		}
+		return errorAttributes;
 	}
 
-	@Override
-	public Map<String, Object> getErrorAttributes(WebRequest webRequest, boolean includeStackTrace,
-			boolean includeMessage, boolean includeBindingErrors) {
+	private Map<String, Object> getErrorAttributes(WebRequest webRequest, boolean includeStackTrace) {
 		Map<String, Object> errorAttributes = new LinkedHashMap<>();
 		errorAttributes.put("timestamp", new Date());
 		addStatus(errorAttributes, webRequest);
-		addErrorDetails(errorAttributes, webRequest, includeStackTrace, includeMessage, includeBindingErrors);
+		addErrorDetails(errorAttributes, webRequest, includeStackTrace);
 		addPath(errorAttributes, webRequest);
 		return errorAttributes;
 	}
@@ -135,57 +130,64 @@ public class DefaultErrorAttributes implements ErrorAttributes, HandlerException
 		}
 	}
 
-	private void addErrorDetails(Map<String, Object> errorAttributes, WebRequest webRequest, boolean includeStackTrace,
-			boolean includeMessage, boolean includeBindingErrors) {
+	private void addErrorDetails(Map<String, Object> errorAttributes, WebRequest webRequest,
+			boolean includeStackTrace) {
 		Throwable error = getError(webRequest);
 		if (error != null) {
 			while (error instanceof ServletException && error.getCause() != null) {
 				error = error.getCause();
 			}
-			if (this.includeException) {
-				errorAttributes.put("exception", error.getClass().getName());
-			}
+			errorAttributes.put("exception", error.getClass().getName());
 			if (includeStackTrace) {
 				addStackTrace(errorAttributes, error);
 			}
 		}
-		addErrorMessage(errorAttributes, webRequest, error, includeMessage, includeBindingErrors);
+		addErrorMessage(errorAttributes, webRequest, error);
 	}
 
-	private void addErrorMessage(Map<String, Object> errorAttributes, WebRequest webRequest, Throwable error,
-			boolean includeMessage, boolean includeBindingErrors) {
+	private void addErrorMessage(Map<String, Object> errorAttributes, WebRequest webRequest, Throwable error) {
 		BindingResult result = extractBindingResult(error);
 		if (result == null) {
-			addExceptionErrorMessage(errorAttributes, webRequest, error, includeMessage);
+			addExceptionErrorMessage(errorAttributes, webRequest, error);
 		}
 		else {
-			addBindingResultErrorMessage(errorAttributes, result, includeMessage, includeBindingErrors);
+			addBindingResultErrorMessage(errorAttributes, result);
 		}
 	}
 
-	private void addExceptionErrorMessage(Map<String, Object> errorAttributes, WebRequest webRequest, Throwable error,
-			boolean includeMessage) {
-		if (!includeMessage) {
-			errorAttributes.put("message", "");
-			return;
-		}
+	private void addExceptionErrorMessage(Map<String, Object> errorAttributes, WebRequest webRequest, Throwable error) {
+		errorAttributes.put("message", getMessage(webRequest, error));
+	}
+
+	/**
+	 * Returns the message to be included as the value of the {@code message} error
+	 * attribute. By default the returned message is the first of the following that is
+	 * not empty:
+	 * <ol>
+	 * <li>Value of the {@link RequestDispatcher#ERROR_MESSAGE} request attribute.
+	 * <li>Message of the given {@code error}.
+	 * <li>{@code No message available}.
+	 * </ol>
+	 * @param webRequest current request
+	 * @param error current error, if any
+	 * @return message to include in the error attributes
+	 * @since 2.4.0
+	 */
+	protected String getMessage(WebRequest webRequest, Throwable error) {
 		Object message = getAttribute(webRequest, RequestDispatcher.ERROR_MESSAGE);
-		if (StringUtils.isEmpty(message) && error != null) {
-			message = error.getMessage();
+		if (!ObjectUtils.isEmpty(message)) {
+			return message.toString();
 		}
-		if (StringUtils.isEmpty(message)) {
-			message = "No message available";
+		if (error != null && StringUtils.hasLength(error.getMessage())) {
+			return error.getMessage();
 		}
-		errorAttributes.put("message", message);
+		return "No message available";
 	}
 
-	private void addBindingResultErrorMessage(Map<String, Object> errorAttributes, BindingResult result,
-			boolean includeMessage, boolean includeBindingErrors) {
-		errorAttributes.put("message", (includeMessage) ? "Validation failed for object='" + result.getObjectName()
-				+ "'. " + "Error count: " + result.getErrorCount() : "");
-		if (includeBindingErrors && result.hasErrors()) {
-			errorAttributes.put("errors", result.getAllErrors());
-		}
+	private void addBindingResultErrorMessage(Map<String, Object> errorAttributes, BindingResult result) {
+		errorAttributes.put("message", "Validation failed for object='" + result.getObjectName() + "'. "
+				+ "Error count: " + result.getErrorCount());
+		errorAttributes.put("errors", result.getAllErrors());
 	}
 
 	private BindingResult extractBindingResult(Throwable error) {
@@ -214,8 +216,14 @@ public class DefaultErrorAttributes implements ErrorAttributes, HandlerException
 
 	@Override
 	public Throwable getError(WebRequest webRequest) {
-		Throwable exception = getAttribute(webRequest, ERROR_ATTRIBUTE);
-		return (exception != null) ? exception : getAttribute(webRequest, RequestDispatcher.ERROR_EXCEPTION);
+		Throwable exception = getAttribute(webRequest, ERROR_INTERNAL_ATTRIBUTE);
+		if (exception == null) {
+			exception = getAttribute(webRequest, RequestDispatcher.ERROR_EXCEPTION);
+		}
+		// store the exception in a well-known attribute to make it available to metrics
+		// instrumentation.
+		webRequest.setAttribute(ErrorAttributes.ERROR_ATTRIBUTE, exception, WebRequest.SCOPE_REQUEST);
+		return exception;
 	}
 
 	@SuppressWarnings("unchecked")

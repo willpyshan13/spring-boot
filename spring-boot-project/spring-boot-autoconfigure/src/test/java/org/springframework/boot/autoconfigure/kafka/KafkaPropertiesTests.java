@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,10 @@ package org.springframework.boot.autoconfigure.kafka;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties.Cleanup;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties.IsolationLevel;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties.Listener;
+import org.springframework.kafka.core.CleanupConfig;
 import org.springframework.kafka.listener.ContainerProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,10 +33,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class KafkaPropertiesTests {
 
+	@SuppressWarnings("rawtypes")
 	@Test
 	void isolationLevelEnumConsistentWithKafkaVersion() {
 		org.apache.kafka.common.IsolationLevel[] original = org.apache.kafka.common.IsolationLevel.values();
-		assertThat(original).extracting("name").containsExactly(IsolationLevel.READ_UNCOMMITTED.name(),
+		assertThat(original).extracting(Enum::name).containsExactly(IsolationLevel.READ_UNCOMMITTED.name(),
 				IsolationLevel.READ_COMMITTED.name());
 		assertThat(original).extracting("id").containsExactly(IsolationLevel.READ_UNCOMMITTED.id(),
 				IsolationLevel.READ_COMMITTED.id());
@@ -45,7 +48,16 @@ class KafkaPropertiesTests {
 	void listenerDefaultValuesAreConsistent() {
 		ContainerProperties container = new ContainerProperties("test");
 		Listener listenerProperties = new KafkaProperties().getListener();
+		assertThat(listenerProperties.isOnlyLogRecordMetadata()).isEqualTo(container.isOnlyLogRecordMetadata());
 		assertThat(listenerProperties.isMissingTopicsFatal()).isEqualTo(container.isMissingTopicsFatal());
+	}
+
+	@Test
+	void cleanupConfigDefaultValuesAreConsistent() {
+		CleanupConfig cleanupConfig = new CleanupConfig();
+		Cleanup cleanup = new KafkaProperties().getStreams().getCleanup();
+		assertThat(cleanup.isOnStartup()).isEqualTo(cleanupConfig.cleanupOnStart());
+		assertThat(cleanup.isOnShutdown()).isEqualTo(cleanupConfig.cleanupOnStop());
 	}
 
 }

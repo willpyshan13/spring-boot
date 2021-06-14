@@ -16,7 +16,6 @@
 
 package org.springframework.boot.autoconfigure.rsocket;
 
-import io.rsocket.RSocketFactory;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 
 import org.springframework.beans.factory.ObjectProvider;
@@ -38,7 +37,7 @@ import org.springframework.messaging.rsocket.annotation.support.RSocketMessageHa
  * @since 2.2.0
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnClass({ RSocketRequester.class, RSocketFactory.class, TcpServerTransport.class })
+@ConditionalOnClass({ RSocketRequester.class, io.rsocket.RSocket.class, TcpServerTransport.class })
 @AutoConfigureAfter(RSocketStrategiesAutoConfiguration.class)
 public class RSocketMessagingAutoConfiguration {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ public class TomcatReactiveWebServerFactory extends AbstractReactiveWebServerFac
 		int port = Math.max(getPort(), 0);
 		connector.setPort(port);
 		if (StringUtils.hasText(getServerHeader())) {
-			connector.setAttribute("server", getServerHeader());
+			connector.setProperty("server", getServerHeader());
 		}
 		if (connector.getProtocolHandler() instanceof AbstractProtocol) {
 			customizeProtocol((AbstractProtocol<?>) connector.getProtocolHandler());
@@ -190,6 +190,9 @@ public class TomcatReactiveWebServerFactory extends AbstractReactiveWebServerFac
 		}
 		// Don't bind to the socket prematurely if ApplicationContext is slow to start
 		connector.setProperty("bindOnInit", "false");
+		if (getHttp2() != null && getHttp2().isEnabled()) {
+			connector.addUpgradeProtocol(new Http2Protocol());
+		}
 		if (getSsl() != null && getSsl().isEnabled()) {
 			customizeSsl(connector);
 		}
@@ -214,9 +217,6 @@ public class TomcatReactiveWebServerFactory extends AbstractReactiveWebServerFac
 
 	private void customizeSsl(Connector connector) {
 		new SslConnectorCustomizer(getSsl(), getSslStoreProvider()).customize(connector);
-		if (getHttp2() != null && getHttp2().isEnabled()) {
-			connector.addUpgradeProtocol(new Http2Protocol());
-		}
 	}
 
 	@Override
@@ -413,7 +413,7 @@ public class TomcatReactiveWebServerFactory extends AbstractReactiveWebServerFac
 	 * @return a new {@link TomcatWebServer} instance
 	 */
 	protected TomcatWebServer getTomcatWebServer(Tomcat tomcat) {
-		return new TomcatWebServer(tomcat, getPort() >= 0, getShutdown().getGracePeriod());
+		return new TomcatWebServer(tomcat, getPort() >= 0, getShutdown());
 	}
 
 	/**

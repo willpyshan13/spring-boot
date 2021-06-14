@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.nio.file.attribute.FileTime;
 import java.util.jar.JarFile;
 
-import org.springframework.boot.loader.tools.Layouts.War;
 import org.springframework.util.Assert;
 
 /**
@@ -32,16 +31,29 @@ import org.springframework.util.Assert;
  * @author Andy Wilkinson
  * @author Stephane Nicoll
  * @author Madhura Bhave
+ * @author Scott Frederick
  * @since 1.0.0
  */
 public class Repackager extends Packager {
 
 	private boolean backupSource = true;
 
+	/**
+	 * Create a new {@link Repackager} instance.
+	 * @param source the source archive file to package
+	 */
 	public Repackager(File source) {
-		this(source, null);
+		super(source);
 	}
 
+	/**
+	 * Create a new {@link Repackager} instance.
+	 * @param source the source archive file to package
+	 * @param layoutFactory the layout factory to use or {@code null}
+	 * @deprecated since 2.3.10 for removal in 2.5 in favor of {@link #Repackager(File)}
+	 * and {@link #setLayoutFactory(LayoutFactory)}
+	 */
+	@Deprecated
 	public Repackager(File source, LayoutFactory layoutFactory) {
 		super(source, layoutFactory);
 	}
@@ -101,9 +113,7 @@ public class Repackager extends Packager {
 	public void repackage(File destination, Libraries libraries, LaunchScript launchScript, FileTime lastModifiedTime)
 			throws IOException {
 		Assert.isTrue(destination != null && !destination.isDirectory(), "Invalid destination");
-		if (lastModifiedTime != null && getLayout() instanceof War) {
-			throw new IllegalStateException("Reproducible repackaging is not supported with war packaging");
-		}
+		Layout layout = getLayout(); // get layout early
 		destination = destination.getAbsoluteFile();
 		File source = getSource();
 		if (isAlreadyPackaged() && source.equals(destination)) {

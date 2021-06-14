@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2020 the original author or authors.
+ * Copyright 2012-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,12 @@ package org.springframework.boot.cloud;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MockConfigurationPropertySource;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.StandardEnvironment;
@@ -34,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests for {@link CloudPlatform}.
  *
  * @author Phillip Webb
+ * @author Nguyen Sach
  */
 class CloudPlatformTests {
 
@@ -48,7 +52,6 @@ class CloudPlatformTests {
 		Environment environment = new MockEnvironment();
 		CloudPlatform platform = CloudPlatform.getActive(environment);
 		assertThat(platform).isNull();
-
 	}
 
 	@Test
@@ -130,11 +133,85 @@ class CloudPlatformTests {
 	}
 
 	@Test
+	void getActiveWhenHasWebsiteSiteNameAndWebsitesEnableAppServiceStorageShouldReturnAzureAppService() {
+		Map<String, Object> envVars = new HashMap<>();
+		envVars.put("WEBSITE_SITE_NAME", "---");
+		envVars.put("WEBSITES_ENABLE_APP_SERVICE_STORAGE", "false");
+		Environment environment = getEnvironmentWithEnvVariables(envVars);
+		CloudPlatform platform = CloudPlatform.getActive(environment);
+		assertThat(platform).isEqualTo(CloudPlatform.AZURE_APP_SERVICE);
+		assertThat(platform.isActive(environment)).isTrue();
+	}
+
+	@Test
+	void getActiveWhenHasWebsiteSiteNameAndNoWebsitesEnableAppServiceStorageShouldNotReturnAzureAppService() {
+		Environment environment = getEnvironmentWithEnvVariables(Collections.singletonMap("WEBSITE_SITE_NAME", "---"));
+		CloudPlatform platform = CloudPlatform.getActive(environment);
+		assertThat(platform).isNull();
+	}
+
+	@Test
+	void getActiveWhenHasWebsitesEnableAppServiceStorageAndNoWebsiteSiteNameShouldNotReturnAzureAppService() {
+		Environment environment = getEnvironmentWithEnvVariables(
+				Collections.singletonMap("WEBSITES_ENABLE_APP_SERVICE_STORAGE", "false"));
+		CloudPlatform platform = CloudPlatform.getActive(environment);
+		assertThat(platform).isNull();
+	}
+
+	@Test
 	void getActiveWhenHasEnforcedCloudPlatform() {
 		Environment environment = getEnvironmentWithEnvVariables(
 				Collections.singletonMap("spring.main.cloud-platform", "kubernetes"));
 		CloudPlatform platform = CloudPlatform.getActive(environment);
 		assertThat(platform).isEqualTo(CloudPlatform.KUBERNETES);
+	}
+
+	@Test
+	void isEnforcedWhenEnvironmentPropertyMatchesReturnsTrue() {
+		MockEnvironment environment = new MockEnvironment();
+		environment.setProperty("spring.main.cloud-platform", "kubernetes");
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(environment)).isTrue();
+	}
+
+	@Test
+	void isEnforcedWhenEnvironmentPropertyDoesNotMatchReturnsFalse() {
+		MockEnvironment environment = new MockEnvironment();
+		environment.setProperty("spring.main.cloud-platform", "heroku");
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(environment)).isFalse();
+	}
+
+	@Test
+	void isEnforcedWhenEnvironmentPropertyIsMissingReturnsFalse() {
+		MockEnvironment environment = new MockEnvironment();
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(environment)).isFalse();
+	}
+
+	@Test
+	void isEnforcedWhenBinderPropertyMatchesReturnsTrue() {
+		Binder binder = new Binder(new MockConfigurationPropertySource("spring.main.cloud-platform", "kubernetes"));
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(binder)).isTrue();
+	}
+
+	@Test
+	void isEnforcedWhenBinderPropertyDoesNotMatchReturnsFalse() {
+		Binder binder = new Binder(new MockConfigurationPropertySource("spring.main.cloud-platform", "heroku"));
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(binder)).isFalse();
+	}
+
+	@Test
+	void isEnforcedWhenBinderPropertyIsMissingReturnsFalse() {
+		Binder binder = new Binder(new MockConfigurationPropertySource());
+		assertThat(CloudPlatform.KUBERNETES.isEnforced(binder)).isFalse();
+	}
+
+	void isActiveWhenNoCloudPlatformIsEnforcedAndHasKubernetesServiceHostAndKubernetesServicePort() {
+		Map<String, Object> envVars = new HashMap<>();
+		envVars.put("EXAMPLE_SERVICE_HOST", "---");
+		envVars.put("EXAMPLE_SERVICE_PORT", "8080");
+		Environment environment = getEnvironmentWithEnvVariables(envVars);
+		((MockEnvironment) environment).setProperty("spring.main.cloud-platform", "none");
+		assertThat(Stream.of(CloudPlatform.values()).filter((platform) -> platform.isActive(environment)))
+				.containsExactly(CloudPlatform.NONE);
 	}
 
 	private Environment getEnvironmentWithEnvVariables(Map<String, Object> environmentVariables) {
